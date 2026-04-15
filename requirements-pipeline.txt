@@ -1,0 +1,31 @@
+# Pipeline dependencies
+# Install with: pip install -r requirements-pipeline.txt
+
+# Core ML
+# torch==2.2.2
+# torchvision==0.17.2           #use cuda 
+Pillow==10.3.0
+numpy==1.26.4
+scikit-learn==1.4.2
+scipy==1.13.0
+tqdm==4.66.4
+
+# MLOps
+mlflow==2.12.2
+dvc==3.50.0
+
+# Orchestration
+apache-airflow==2.9.1
+
+# API
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+pydantic==2.7.1
+
+# Monitoring
+prometheus-client==0.20.0
+
+# Utilities
+python-dotenv==1.0.1
+PyYAML==6.0.1
