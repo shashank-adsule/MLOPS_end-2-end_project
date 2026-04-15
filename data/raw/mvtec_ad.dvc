@@ -1,0 +1,6 @@
+outs:
+- md5: 85a8105bca6eccc60510a84de813ddc2.dir
+  size: 5271247124
+  nfiles: 6644
+  hash: md5
+  path: mvtec_ad
