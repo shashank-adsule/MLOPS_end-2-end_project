@@ -1,0 +1,38 @@
+data:
+  raw_dir: data/raw/mvtec_ad
+  processed_dir: data/processed
+  categories:
+    - bottle
+    - cable
+    - capsule
+    - carpet
+    - grid
+    - hazelnut
+    - leather
+    - metal_nut
+    - pill
+    - screw
+    - tile
+    - toothbrush
+    - transistor
+    - wood
+    - zipper
+
+model:
+  category: bottle
+  backbone: wide_resnet50_2
+  image_size: 256
+  patch_size: 224
+  coreset_ratio: 0.1
+  layers:
+    - layer2
+    - layer3
+
+training:
+  batch_size: 32
+  num_workers: 4
+  device: cuda
+
+inference:
+  anomaly_threshold: 0.5
+  latency_target_ms: 200
