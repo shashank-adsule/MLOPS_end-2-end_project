@@ -4,23 +4,26 @@ src/pipeline/preprocess.py
 Image preprocessing pipeline for MVTec AD dataset.
 
 Responsibilities:
-  - Resize images to a configurable size (default 256×256)
-  - Center-crop to patch size (default 224×224) for backbone compatibility
+  - Resize images to a configurable size (default 256x256)
+  - Center-crop to patch size (default 224x224) for backbone compatibility
   - Normalize with ImageNet mean/std (matches WideResNet50 pretraining)
   - Save processed tensors as .pt files for fast DataLoader loading
   - Return throughput statistics consumed by Airflow DAG
 
 Output layout:
   data/processed/{category}/
-      train/{0001.pt, 0002.pt, ...}   ← normal-only
+      train/{0001.pt, 0002.pt, ...}   <- normal-only
       test/{good/0001.pt, broken_large/0001.pt, ...}
+
+Usage:
+  python -m src.pipeline.preprocess
 """
 
 import os
 import time
 import logging
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import torch
 import torchvision.transforms as T
@@ -30,7 +33,7 @@ from tqdm import tqdm
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# ImageNet statistics — matches WideResNet50 / ResNet backbone pretraining
+# ImageNet statistics -- matches WideResNet50 / ResNet backbone pretraining
 # ---------------------------------------------------------------------------
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
@@ -86,11 +89,11 @@ def preprocess_all_categories(
         elapsed = round(time.time() - t0, 2)
         stats[category] = {
             "train_count": train_count,
-            "test_count": test_count,
+            "test_count":  test_count,
             "elapsed_sec": elapsed,
         }
         log.info(
-            "%s done — train: %d, test: %d, time: %.1fs",
+            "%s done -- train: %d, test: %d, time: %.1fs",
             category, train_count, test_count, elapsed,
         )
 
@@ -107,10 +110,7 @@ def load_tensor(tensor_path: str) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 def _build_transform(image_size: int, patch_size: int) -> T.Compose:
-    """
-    Build the preprocessing transform pipeline.
-    Resize → CenterCrop → ToTensor → Normalize (ImageNet stats).
-    """
+    """Resize -> CenterCrop -> ToTensor -> Normalize (ImageNet stats)."""
     return T.Compose([
         T.Resize((image_size, image_size), interpolation=T.InterpolationMode.BILINEAR),
         T.CenterCrop(patch_size),
@@ -125,10 +125,7 @@ def _preprocess_split(
     transform: T.Compose,
     split_label: str,
 ) -> int:
-    """
-    Preprocess all images in src_dir, save tensors to dst_dir.
-    Returns count of processed images.
-    """
+    """Preprocess all images in src_dir, save tensors to dst_dir."""
     dst_dir.mkdir(parents=True, exist_ok=True)
     image_paths = _collect_images(src_dir)
 
@@ -137,16 +134,14 @@ def _preprocess_split(
         return 0
 
     count = 0
-    for img_path in tqdm(image_paths, desc=split_label, leave=False):
+    for img_path in tqdm(image_paths, desc=split_label, leave=True):
         tensor = _load_and_transform(img_path, transform)
         if tensor is None:
             continue
-        # Zero-padded filename: 0001.pt, 0002.pt, ...
         out_path = dst_dir / f"{count + 1:04d}.pt"
         torch.save(tensor, out_path)
         count += 1
 
-    log.debug("%s: saved %d tensors to %s", split_label, count, dst_dir)
     return count
 
 
@@ -156,10 +151,7 @@ def _preprocess_test_split(
     transform: T.Compose,
     category: str,
 ) -> int:
-    """
-    Preprocess all test subdirectories (good, broken_large, etc.).
-    Preserves subfolder structure under dst_dir.
-    """
+    """Preprocess all test subdirectories (good, broken_large, etc.)."""
     total = 0
     for subdir in sorted(src_test_dir.iterdir()):
         if not subdir.is_dir():
@@ -178,10 +170,7 @@ def _load_and_transform(
     img_path: Path,
     transform: T.Compose,
 ) -> torch.Tensor:
-    """
-    Open image, convert to RGB, apply transform.
-    Returns None on failure (logs warning instead of crashing pipeline).
-    """
+    """Open image, convert to RGB, apply transform. Returns None on failure."""
     try:
         with Image.open(img_path) as img:
             rgb = img.convert("RGB")
@@ -199,3 +188,66 @@ def _collect_images(directory: Path) -> List[Path]:
         p for p in directory.iterdir()
         if p.is_file() and p.suffix.lower() in VALID_IMAGE_EXTENSIONS
     )
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import yaml
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    )
+
+    # Load params.yaml
+    params_path = Path("params.yaml")
+    if not params_path.exists():
+        raise FileNotFoundError(
+            "params.yaml not found. Make sure you run from the project root:\n"
+            "  cd D:\\code\\repo\\MLOPS_end-2-end_project\n"
+            "  python -m src.pipeline.preprocess"
+        )
+
+    with open(params_path) as f:
+        params = yaml.safe_load(f)
+
+    raw_dir       = os.environ.get("RAW_DATA_DIR",       params["data"]["raw_dir"])
+    processed_dir = os.environ.get("PROCESSED_DATA_DIR", params["data"]["processed_dir"])
+    categories    = params["data"]["categories"]
+    image_size    = params["model"]["image_size"]
+    patch_size    = params["model"]["patch_size"]
+
+    log.info("=" * 55)
+    log.info("MVTec AD Preprocessing Pipeline")
+    log.info("=" * 55)
+    log.info("Raw data dir   : %s", raw_dir)
+    log.info("Processed dir  : %s", processed_dir)
+    log.info("Categories     : %d total", len(categories))
+    log.info("Image size     : %d -> %d (crop)", image_size, patch_size)
+    log.info("=" * 55)
+
+    stats = preprocess_all_categories(
+        raw_dir=raw_dir,
+        processed_dir=processed_dir,
+        categories=categories,
+        image_size=image_size,
+        patch_size=patch_size,
+    )
+
+    # Print summary table
+    print("\n" + "=" * 55)
+    print(f"{'Category':<15} {'Train':>8} {'Test':>8} {'Time(s)':>10}")
+    print("-" * 55)
+    for cat, s in stats.items():
+        print(
+            f"{cat:<15} {s['train_count']:>8} "
+            f"{s['test_count']:>8} {s['elapsed_sec']:>10.1f}"
+        )
+    print("=" * 55)
+    print(f"\nProcessed data saved to: {processed_dir}")
+    # print("Next step: python -m src.model.train --category bottle")
