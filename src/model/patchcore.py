@@ -20,13 +20,13 @@ Reference: Roth et al. "Towards Total Recall in Industrial Anomaly Detection"
 import logging
 from typing import Dict, List, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
-from torchvision.models import Wide_ResNet50_2_Weights
 from scipy.ndimage import gaussian_filter
-import numpy as np
+from torchvision.models import Wide_ResNet50_2_Weights
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ class PatchCore(nn.Module):
         else:
             log.info("PatchCore using CPU")
 
-        # Memory bank — populated during fit()
+        # Memory bank populated during fit()
         self.memory_bank: torch.Tensor = None
 
         # Build feature extractor
@@ -91,7 +91,7 @@ class PatchCore(nn.Module):
         all_patches = []
 
         with torch.no_grad():
-            for batch in dataloader:
+            for i, batch in enumerate(dataloader):
                 if isinstance(batch, (list, tuple)):
                     images = batch[0]
                 else:
@@ -99,17 +99,16 @@ class PatchCore(nn.Module):
                 images = images.to(self.device)
                 patches = self._extract_patches(images)   # [N, D]
                 all_patches.append(patches.cpu())
+                if (i + 1) % 5 == 0 or (i + 1) == len(dataloader):
+                    print(f"         Batch {i+1}/{len(dataloader)} processed...",
+                          flush=True)
 
         memory_bank = torch.cat(all_patches, dim=0)       # [Total, D]
-        log.info("Raw memory bank: %d patches, dim=%d", *memory_bank.shape)
+        print(f"         Raw patches    : {len(memory_bank)}", flush=True)
 
         # Coreset subsampling
         self.memory_bank = self._coreset_subsample(memory_bank)
-        log.info(
-            "After coreset subsampling (ratio=%.2f): %d patches",
-            self.coreset_ratio,
-            len(self.memory_bank),
-        )
+        print(f"         After coreset  : {len(self.memory_bank)}", flush=True)
 
     def predict(
         self,
@@ -122,8 +121,8 @@ class PatchCore(nn.Module):
             image: Preprocessed image tensor [1, 3, H, W] or [3, H, W]
 
         Returns:
-            anomaly_score: float — max patch distance (higher = more anomalous)
-            heatmap:       np.ndarray [H, W] — pixel-level anomaly map [0, 1]
+            anomaly_score: float
+            heatmap:       np.ndarray [H, W] in [0, 1]
         """
         if self.memory_bank is None:
             raise RuntimeError("Memory bank is empty. Call fit() first.")
@@ -135,16 +134,12 @@ class PatchCore(nn.Module):
         with torch.no_grad():
             patch_features = self._extract_patches(image)   # [P, D]
 
-        # Nearest-neighbor distances to memory bank
         distances = self._nearest_neighbor_distances(
             patch_features.cpu(),
             self.memory_bank,
-        )   # [P]
+        )
 
-        # Anomaly score = max patch distance
         anomaly_score = float(distances.max())
-
-        # Build spatial heatmap
         heatmap = self._build_heatmap(distances)
 
         return anomaly_score, heatmap
@@ -164,18 +159,18 @@ class PatchCore(nn.Module):
     def save(self, path: str) -> None:
         """Save memory bank and config to disk."""
         torch.save({
-            "memory_bank":    self.memory_bank,
-            "backbone_name":  self.backbone_name,
-            "layers":         self.layers,
-            "coreset_ratio":  self.coreset_ratio,
-            "image_size":     self.image_size,
+            "memory_bank":   self.memory_bank,
+            "backbone_name": self.backbone_name,
+            "layers":        self.layers,
+            "coreset_ratio": self.coreset_ratio,
+            "image_size":    self.image_size,
         }, path)
         log.info("PatchCore saved to %s", path)
 
     @classmethod
     def load(cls, path: str, device: str = "cuda") -> "PatchCore":
         """Load a saved PatchCore model from disk."""
-        checkpoint = torch.load(path, map_location="cpu")
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
         model = cls(
             backbone=checkpoint["backbone_name"],
             layers=checkpoint["layers"],
@@ -184,8 +179,10 @@ class PatchCore(nn.Module):
             device=device,
         )
         model.memory_bank = checkpoint["memory_bank"]
-        log.info("PatchCore loaded from %s — %d patches in memory bank",
-                 path, len(model.memory_bank))
+        log.info(
+            "PatchCore loaded from %s — %d patches in memory bank",
+            path, len(model.memory_bank),
+        )
         return model
 
     # ------------------------------------------------------------------
@@ -196,7 +193,6 @@ class PatchCore(nn.Module):
         """Load pretrained WideResNet50, freeze all weights."""
         weights = Wide_ResNet50_2_Weights.IMAGENET1K_V1
         backbone = models.wide_resnet50_2(weights=weights)
-        # Freeze all parameters — we only use it as a feature extractor
         for param in backbone.parameters():
             param.requires_grad = False
         return backbone
@@ -211,28 +207,23 @@ class PatchCore(nn.Module):
         for name, module in self.feature_extractor.named_modules():
             if name in self.layers:
                 module.register_forward_hook(make_hook(name))
-                log.debug("Registered hook on layer: %s", name)
 
     def _extract_patches(self, images: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass through backbone, extract + aggregate multi-scale features.
-
-        Returns:
-            patches: [N*H*W, D] flattened patch feature vectors
+        Forward pass → extract + aggregate multi-scale features.
+        Returns: [N*H*W, D] patch feature vectors
         """
         self._features.clear()
         _ = self.feature_extractor(images)
 
-        # Collect features from all registered layers
         feature_maps = []
         target_size = None
 
         for layer_name in self.layers:
-            feat = self._features[layer_name]   # [B, C, H, W]
+            feat = self._features[layer_name]
             if target_size is None:
-                target_size = feat.shape[-2:]    # use first layer's spatial size
+                target_size = feat.shape[-2:]
             else:
-                # Upsample to match first layer's spatial resolution
                 feat = F.interpolate(
                     feat,
                     size=target_size,
@@ -241,32 +232,26 @@ class PatchCore(nn.Module):
                 )
             feature_maps.append(feat)
 
-        # Concatenate along channel dimension → [B, C_total, H, W]
         combined = torch.cat(feature_maps, dim=1)
-
-        # Adaptive average pooling per patch (neighbourhood aggregation)
         combined = F.avg_pool2d(combined, kernel_size=3, stride=1, padding=1)
 
-        # Reshape to [B*H*W, C_total]
         B, C, H, W = combined.shape
         patches = combined.permute(0, 2, 3, 1).reshape(B * H * W, C)
-
-        # L2 normalize patch vectors
         patches = F.normalize(patches, p=2, dim=1)
 
         return patches
 
     # ------------------------------------------------------------------
-    # Coreset subsampling (greedy farthest-point sampling)
+    # Coreset subsampling — CPU-safe random projection approximation
     # ------------------------------------------------------------------
 
     def _coreset_subsample(self, patches: torch.Tensor) -> torch.Tensor:
         """
-        Greedy coreset subsampling — keeps patches that maximally cover
-        the feature space, discarding near-duplicates.
+        Fast coreset subsampling using random projection + mini-batch
+        k-means approximation.
 
-        Uses an approximation for speed: random initial selection then
-        iterative farthest-point sampling.
+        This avoids the full N×N distance matrix that causes OOM/hangs
+        on GPUs with limited VRAM (e.g. RTX 3050 6GB).
         """
         n_total = len(patches)
         n_keep  = max(1, int(n_total * self.coreset_ratio))
@@ -274,33 +259,75 @@ class PatchCore(nn.Module):
         if n_keep >= n_total:
             return patches
 
-        log.info("Coreset: selecting %d from %d patches...", n_keep, n_total)
+        print(f"         Coreset: {n_total} → {n_keep} patches...", flush=True)
 
-        # Move to GPU for speed if available
-        patches_gpu = patches.to(self.device)
+        # Move to CPU for coreset (avoids VRAM pressure)
+        patches_cpu = patches.cpu().float()
 
-        selected_indices = []
+        # Use random projection to reduce dimensionality first
+        # This makes distance computations much faster
+        D = patches_cpu.shape[1]
+        proj_dim = min(128, D)
+        torch.manual_seed(42)
+        projection = torch.randn(D, proj_dim) / (proj_dim ** 0.5)
+        projected = patches_cpu @ projection           # [N, 128]
+
+        selected_indices = self._greedy_coreset_cpu(projected, n_keep)
+        result = patches_cpu[selected_indices]
+
+        print(f"         Coreset done.", flush=True)
+        return result
+
+    def _greedy_coreset_cpu(
+        self,
+        patches: torch.Tensor,
+        n_keep: int,
+        chunk_size: int = 1000,
+    ) -> torch.Tensor:
+        """
+        Greedy farthest-point sampling on CPU using chunked distance
+        computation — avoids building the full N×N matrix at once.
+
+        Args:
+            patches:    [N, D] projected patch features on CPU
+            n_keep:     number of patches to select
+            chunk_size: process distances in chunks to limit RAM usage
+
+        Returns:
+            selected_indices: [n_keep] LongTensor
+        """
+        n_total = len(patches)
+        selected = []
 
         # Random start
         idx = torch.randint(0, n_total, (1,)).item()
-        selected_indices.append(idx)
+        selected.append(idx)
 
-        # Track min distance from each point to the selected set
-        min_distances = torch.full((n_total,), float("inf"), device=self.device)
+        # min_distances[i] = distance from patch i to nearest selected patch
+        min_distances = torch.full((n_total,), float("inf"))
 
-        for _ in range(n_keep - 1):
-            # Distance from last selected point to all others
-            last = patches_gpu[selected_indices[-1]].unsqueeze(0)   # [1, D]
-            dists = torch.cdist(patches_gpu, last).squeeze(1)        # [N]
-            min_distances = torch.minimum(min_distances, dists)
+        for step in range(n_keep - 1):
+            last = patches[selected[-1]].unsqueeze(0)   # [1, D]
 
-            # Select the farthest point
+            # Update min_distances in chunks to avoid OOM
+            for start in range(0, n_total, chunk_size):
+                end   = min(start + chunk_size, n_total)
+                chunk = patches[start:end]              # [chunk, D]
+                dists = torch.cdist(chunk, last).squeeze(1)  # [chunk]
+                min_distances[start:end] = torch.minimum(
+                    min_distances[start:end], dists
+                )
+
+            # Pick farthest point
             idx = int(min_distances.argmax().item())
-            selected_indices.append(idx)
+            selected.append(idx)
 
-        selected = patches_gpu[selected_indices].cpu()
-        log.info("Coreset selection complete.")
-        return selected
+            # Progress every 20%
+            if (step + 1) % max(1, n_keep // 5) == 0:
+                pct = (step + 1) / n_keep * 100
+                print(f"         Coreset progress: {pct:.0f}%", flush=True)
+
+        return torch.tensor(selected, dtype=torch.long)
 
     # ------------------------------------------------------------------
     # Nearest-neighbor distance
@@ -310,40 +337,34 @@ class PatchCore(nn.Module):
         self,
         query: torch.Tensor,
         memory: torch.Tensor,
-        batch_size: int = 512,
+        batch_size: int = 256,
     ) -> torch.Tensor:
         """
-        Compute distance from each query patch to its nearest neighbour
-        in the memory bank. Batched to avoid OOM.
+        Distance from each query patch to its nearest neighbour in memory.
+        Batched to avoid OOM.
         """
         memory = memory.to(self.device)
         distances = []
 
         for i in range(0, len(query), batch_size):
             q_batch = query[i : i + batch_size].to(self.device)
-            # [Q, M] pairwise L2 distances
             dists = torch.cdist(q_batch, memory)
-            nn_dists, _ = dists.min(dim=1)   # [Q]
+            nn_dists, _ = dists.min(dim=1)
             distances.append(nn_dists.cpu())
 
-        return torch.cat(distances, dim=0)   # [P]
+        return torch.cat(distances, dim=0)
 
     # ------------------------------------------------------------------
     # Heatmap generation
     # ------------------------------------------------------------------
 
     def _build_heatmap(self, patch_distances: torch.Tensor) -> np.ndarray:
-        """
-        Reshape flat patch distances into a spatial heatmap and upsample
-        to the original image size with Gaussian smoothing.
-        """
-        # Infer spatial grid size from number of patches
+        """Reshape patch distances into a smoothed spatial heatmap."""
         n_patches = len(patch_distances)
         grid_size = int(n_patches ** 0.5)
 
         scores_2d = patch_distances.numpy().reshape(grid_size, grid_size)
 
-        # Upsample to image size
         heatmap = np.array(
             torch.nn.functional.interpolate(
                 torch.tensor(scores_2d).unsqueeze(0).unsqueeze(0).float(),
@@ -353,10 +374,8 @@ class PatchCore(nn.Module):
             ).squeeze().numpy()
         )
 
-        # Gaussian smoothing for cleaner localization
         heatmap = gaussian_filter(heatmap, sigma=4)
 
-        # Normalize to [0, 1]
         h_min, h_max = heatmap.min(), heatmap.max()
         if h_max > h_min:
             heatmap = (heatmap - h_min) / (h_max - h_min)

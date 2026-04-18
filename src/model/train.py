@@ -21,11 +21,16 @@ Usage:
 import argparse
 import json
 import logging
+import multiprocessing
 import os
+import platform
 import subprocess
 import time
 from pathlib import Path
 from typing import Dict, List
+
+from dotenv import load_dotenv
+load_dotenv()
 
 import mlflow
 import mlflow.pytorch
@@ -33,10 +38,6 @@ import numpy as np
 import torch
 import yaml
 from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms
-
-from dotenv import load_dotenv
-load_dotenv()
 
 from src.model.patchcore import PatchCore
 from src.model.evaluate import evaluate_category
@@ -72,13 +73,17 @@ class MVTecTrainDataset(Dataset):
                 f"No tensors found in {processed_dir}/{category}/train/. "
                 "Run the data pipeline first: python -m src.pipeline.preprocess"
             )
-        log.info("Dataset: %d training tensors for '%s'", len(self.tensor_paths), category)
+        log.info("  Found %d training tensors for '%s'", len(self.tensor_paths), category)
 
     def __len__(self):
         return len(self.tensor_paths)
 
     def __getitem__(self, idx):
-        return torch.load(self.tensor_paths[idx], map_location="cpu")
+        return torch.load(
+            self.tensor_paths[idx],
+            map_location="cpu",
+            weights_only=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -90,24 +95,38 @@ def train_category(
     processed_dir: str,
     models_dir: str,
     reports_dir: str,
+    category_index: int,
+    total_categories: int,
 ) -> Dict:
-    """
-    Train PatchCore for one category and log everything to MLflow.
+    """Train PatchCore for one category and log everything to MLflow."""
 
-    Returns dict of metrics.
-    """
-    log.info("=" * 60)
-    log.info("Training category: %s", category)
-    log.info("=" * 60)
+    print(f"\n{'='*65}")
+    print(f"  [{category_index}/{total_categories}] Starting: {category.upper()}")
+    print(f"{'='*65}")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    log.info("Device: %s", device)
+
+    if device == "cuda":
+        gpu_name = torch.cuda.get_device_name(0)
+        vram_total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        vram_used  = torch.cuda.memory_allocated(0) / 1024**3
+        print(f"  GPU      : {gpu_name}")
+        print(f"  VRAM     : {vram_used:.1f}GB used / {vram_total:.1f}GB total")
+    else:
+        print(f"  Device   : CPU")
+
+    print(f"  Category : {category}")
+    print(f"  Backbone : {params['model']['backbone']}")
+    print(f"  Coreset  : {params['model']['coreset_ratio']}")
+    print(f"  Batch    : {params['training']['batch_size']}")
+    print(f"{'-'*65}")
 
     with mlflow.start_run(run_name=f"patchcore_{category}"):
 
         # ----------------------------------------------------------------
         # Log parameters
         # ----------------------------------------------------------------
+        print(f"  [1/5] Logging parameters to MLflow...")
         mlflow.log_params({
             "category":      category,
             "backbone":      params["model"]["backbone"],
@@ -126,28 +145,44 @@ def train_category(
                 stderr=subprocess.DEVNULL,
             ).decode().strip()
             mlflow.set_tag("git_commit", git_hash)
+            print(f"       Git commit : {git_hash}")
         except Exception:
             mlflow.set_tag("git_commit", "unknown")
 
         mlflow.set_tag("category", category)
         mlflow.set_tag("algorithm", "PatchCore")
         mlflow.set_tag("dataset", "MVTec AD")
+        print(f"  [1/5] Parameters logged OK")
 
         # ----------------------------------------------------------------
         # Build dataloader
         # ----------------------------------------------------------------
+        print(f"\n  [2/5] Loading dataset...")
         dataset = MVTecTrainDataset(processed_dir, category)
+
+        # Windows fix: num_workers must be 0 on Windows
+        num_workers = 0 if platform.system() == "Windows" else params["training"]["num_workers"]
+        if platform.system() == "Windows":
+            print(f"       Windows detected — using num_workers=0")
+
         dataloader = DataLoader(
             dataset,
             batch_size=params["training"]["batch_size"],
             shuffle=False,
-            num_workers=params["training"]["num_workers"],
+            num_workers=num_workers,
             pin_memory=(device == "cuda"),
         )
+        print(f"       Batches : {len(dataloader)}")
+        print(f"  [2/5] Dataset loaded OK")
 
         # ----------------------------------------------------------------
-        # Initialize and fit PatchCore
+        # Initialize PatchCore
         # ----------------------------------------------------------------
+        print(f"\n  [3/5] Building PatchCore memory bank...")
+        print(f"       Extracting features from {params['model']['backbone']}...")
+        print(f"       Layers: {params['model']['layers']}")
+        print(f"       This may take a few minutes...")
+
         model = PatchCore(
             backbone=params["model"]["backbone"],
             layers=params["model"]["layers"],
@@ -157,17 +192,26 @@ def train_category(
         )
 
         t_start = time.time()
-        model.fit(dataloader)
-        train_time = time.time() - t_start
 
-        mlflow.log_metric("train_time_sec", round(train_time, 2))
-        mlflow.log_metric("memory_bank_size", len(model.memory_bank))
-        log.info("Training complete in %.1fs", train_time)
+        # Fit with progress updates
+        model.fit(dataloader)
+
+        train_time = round(time.time() - t_start, 2)
+        memory_bank_size = len(model.memory_bank)
+
+        mlflow.log_metric("train_time_sec", train_time)
+        mlflow.log_metric("memory_bank_size", memory_bank_size)
+
+        print(f"       Memory bank size : {memory_bank_size} patches")
+        print(f"       Time taken       : {train_time}s")
+        print(f"  [3/5] Memory bank built OK")
 
         # ----------------------------------------------------------------
         # Evaluate
         # ----------------------------------------------------------------
-        log.info("Evaluating on test set...")
+        print(f"\n  [4/5] Evaluating on test set...")
+        print(f"       Running inference on all test images...")
+
         metrics = evaluate_category(
             model=model,
             processed_dir=processed_dir,
@@ -175,66 +219,78 @@ def train_category(
             reports_dir=reports_dir,
         )
 
-        # Log all evaluation metrics
         mlflow.log_metrics({
-            "auroc":            round(metrics["auroc"], 4),
-            "f1_score":         round(metrics["f1_score"], 4),
-            "pixel_auroc":      round(metrics["pixel_auroc"], 4),
-            "avg_latency_ms":   round(metrics["avg_latency_ms"], 2),
-            "threshold":        round(metrics["threshold"], 4),
+            "auroc":          round(metrics["auroc"], 4),
+            "f1_score":       round(metrics["f1_score"], 4),
+            "pixel_auroc":    round(metrics["pixel_auroc"], 4),
+            "avg_latency_ms": round(metrics["avg_latency_ms"], 2),
+            "threshold":      round(metrics["threshold"], 4),
         })
 
-        log.info(
-            "Metrics — AUROC: %.4f | F1: %.4f | Pixel-AUROC: %.4f | Latency: %.1fms",
-            metrics["auroc"],
-            metrics["f1_score"],
-            metrics["pixel_auroc"],
-            metrics["avg_latency_ms"],
-        )
+        print(f"\n       +--------------------------+----------+")
+        print(f"       | Metric                   | Value    |")
+        print(f"       +--------------------------+----------+")
+        print(f"       | Image AUROC              | {metrics['auroc']:.4f}   |")
+        print(f"       | F1 Score                 | {metrics['f1_score']:.4f}   |")
+        print(f"       | Pixel AUROC              | {metrics['pixel_auroc']:.4f}   |")
+        print(f"       | Avg Latency              | {metrics['avg_latency_ms']:.1f}ms   |")
+        print(f"       | Threshold                | {metrics['threshold']:.4f}   |")
+        print(f"       | Normal samples           | {metrics['n_normal']}      |")
+        print(f"       | Defect samples           | {metrics['n_defect']}      |")
+        print(f"       +--------------------------+----------+")
 
-        # Latency SLA check (must be < 200ms per problem statement)
+        # Latency SLA check
         if metrics["avg_latency_ms"] > 200:
-            log.warning(
-                "Latency SLA BREACH: %.1fms > 200ms target",
-                metrics["avg_latency_ms"],
-            )
+            print(f"       WARNING: Latency {metrics['avg_latency_ms']:.1f}ms exceeds 200ms SLA!")
             mlflow.set_tag("sla_breach", "latency")
         else:
+            print(f"       Latency SLA: PASS ({metrics['avg_latency_ms']:.1f}ms < 200ms)")
             mlflow.set_tag("sla_breach", "none")
 
+        print(f"  [4/5] Evaluation complete")
+
         # ----------------------------------------------------------------
-        # Save model artifact
+        # Save model + artifacts
         # ----------------------------------------------------------------
+        print(f"\n  [5/5] Saving model and artifacts...")
+
         Path(models_dir).mkdir(parents=True, exist_ok=True)
         model_path = str(Path(models_dir) / f"patchcore_{category}.pt")
         model.save(model_path)
+        print(f"       Model saved  : {model_path}")
 
-        # Log model file as MLflow artifact
         mlflow.log_artifact(model_path, artifact_path="models")
+        print(f"       Artifact logged to MLflow")
 
-        # Log ROC curve if it exists
+        # Log ROC curve
         roc_path = Path(reports_dir) / category / "roc_curve.csv"
         if roc_path.exists():
             mlflow.log_artifact(str(roc_path), artifact_path="reports")
+            print(f"       ROC curve logged")
 
-        # Log sample heatmaps
+        # Log heatmaps
         heatmap_dir = Path(reports_dir) / category / "heatmaps"
         if heatmap_dir.exists():
             mlflow.log_artifacts(str(heatmap_dir), artifact_path="heatmaps")
+            print(f"       Heatmaps logged")
 
-        # Register model in MLflow Model Registry
+        # Register in MLflow Model Registry
         model_uri = f"runs:/{mlflow.active_run().info.run_id}/models"
         try:
-            mlflow.register_model(
-                model_uri=model_uri,
-                name=f"patchcore_{category}",
-            )
-            log.info("Model registered in MLflow registry: patchcore_%s", category)
+            mlflow.register_model(model_uri=model_uri, name=f"patchcore_{category}")
+            print(f"       Registered in MLflow registry: patchcore_{category}")
         except Exception as e:
-            log.warning("Could not register model: %s", e)
+            print(f"       Registry warning: {e}")
+
+        run_id = mlflow.active_run().info.run_id
+        print(f"       MLflow run ID: {run_id}")
+        print(f"  [5/5] Artifacts saved OK")
+
+        print(f"\n  DONE: {category} — AUROC={metrics['auroc']:.4f} | "
+              f"F1={metrics['f1_score']:.4f} | Latency={metrics['avg_latency_ms']:.1f}ms")
 
         metrics["category"] = category
-        metrics["run_id"] = mlflow.active_run().info.run_id
+        metrics["run_id"]   = run_id
         return metrics
 
 
@@ -247,7 +303,7 @@ def main():
         "--category",
         type=str,
         default=None,
-        help="Category to train on. Use 'all' for all 15. Defaults to params.yaml value.",
+        help="Category to train. Use 'all' for all 15. Default: params.yaml value.",
     )
     parser.add_argument(
         "--params",
@@ -261,11 +317,15 @@ def main():
     with open(args.params) as f:
         params = yaml.safe_load(f)
 
+    # Force num_workers=0 on Windows
+    if platform.system() == "Windows":
+        params["training"]["num_workers"] = 0
+
     processed_dir = params["data"]["processed_dir"]
     models_dir    = "models"
     reports_dir   = "reports"
 
-    # Determine categories to train
+    # Determine categories
     if args.category == "all":
         categories = CATEGORIES
     elif args.category:
@@ -274,24 +334,40 @@ def main():
         categories = [params["model"]["category"]]
 
     # ----------------------------------------------------------------
+    # Startup banner
+    # ----------------------------------------------------------------
+    print(f"\n{'#'*65}")
+    print(f"#  PatchCore Training — MVTec AD Anomaly Detection")
+    print(f"#  Categories : {len(categories)}")
+    print(f"#  Device     : {'CUDA - ' + torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
+    print(f"#  System     : {platform.system()}")
+    print(f"{'#'*65}\n")
+
+    # ----------------------------------------------------------------
     # Configure MLflow → DagsHub
     # ----------------------------------------------------------------
     dagshub_token = os.environ.get("DAGSHUB_TOKEN", "")
     if dagshub_token:
         os.environ["MLFLOW_TRACKING_USERNAME"] = "da25m005"
         os.environ["MLFLOW_TRACKING_PASSWORD"] = dagshub_token
+        print(f"MLflow auth     : DagsHub token loaded from .env")
+    else:
+        print(f"WARNING: DAGSHUB_TOKEN not found in .env — MLflow may fail")
 
-    mlflow.set_tracking_uri(
-        "https://dagshub.com/da25m005/MLOPS_end-2-end_project.mlflow"
-    )
+    tracking_uri = "https://dagshub.com/da25m005/MLOPS_end-2-end_project.mlflow"
+    mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment("patchcore-mvtec-ad")
-    log.info("MLflow tracking URI: %s", mlflow.get_tracking_uri())
+    print(f"MLflow URI      : {tracking_uri}")
+    print(f"MLflow experiment: patchcore-mvtec-ad")
+    print(f"Categories      : {categories}\n")
 
     # ----------------------------------------------------------------
-    # Train all requested categories
+    # Train all categories
     # ----------------------------------------------------------------
     all_metrics = []
-    for category in categories:
+    t_total = time.time()
+
+    for i, category in enumerate(categories, start=1):
         try:
             metrics = train_category(
                 category=category,
@@ -299,34 +375,47 @@ def main():
                 processed_dir=processed_dir,
                 models_dir=models_dir,
                 reports_dir=reports_dir,
+                category_index=i,
+                total_categories=len(categories),
             )
             all_metrics.append(metrics)
         except Exception as e:
-            log.error("Failed to train category '%s': %s", category, e)
+            log.error("Failed category '%s': %s", category, e)
+            print(f"\n  ERROR in {category}: {e}\n")
             continue
 
-    # Save summary metrics
+    total_time = round(time.time() - t_total, 1)
+
+    # ----------------------------------------------------------------
+    # Save summary + print table
+    # ----------------------------------------------------------------
     Path(reports_dir).mkdir(parents=True, exist_ok=True)
     summary_path = Path(reports_dir) / "metrics.json"
     with open(summary_path, "w") as f:
         json.dump(all_metrics, f, indent=2)
 
-    log.info("Training complete. Summary saved to %s", summary_path)
-
-    # Print summary table
-    print("\n" + "=" * 70)
-    print(f"{'Category':<15} {'AUROC':>8} {'F1':>8} {'Pixel-AUROC':>12} {'Latency':>10}")
-    print("-" * 70)
+    print(f"\n\n{'#'*65}")
+    print(f"#  TRAINING COMPLETE — {len(all_metrics)}/{len(categories)} categories")
+    print(f"#  Total time: {total_time}s ({total_time/60:.1f} mins)")
+    print(f"{'#'*65}")
+    print(f"\n{'='*65}")
+    print(f"{'Category':<15} {'AUROC':>8} {'F1':>8} {'Pixel-AUROC':>12} {'Latency':>12}")
+    print(f"{'-'*65}")
     for m in all_metrics:
         print(
             f"{m['category']:<15} "
             f"{m['auroc']:>8.4f} "
             f"{m['f1_score']:>8.4f} "
             f"{m['pixel_auroc']:>12.4f} "
-            f"{m['avg_latency_ms']:>9.1f}ms"
+            f"{m['avg_latency_ms']:>10.1f}ms"
         )
-    print("=" * 70)
+    print(f"{'='*65}")
+    print(f"\nSummary saved  : {summary_path}")
+    print(f"MLflow runs    : {tracking_uri}")
+    print(f"Next step      : python -m src.api.main")
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
+    print(f"Starting training with PyTorch {torch.__version__} on {platform.system()}")
     main()
