@@ -1,0 +1,55 @@
+# monitoring/alert_rules.yml
+groups:
+  - name: defect_detection_alerts
+    interval: 15s
+    rules:
+
+      # Alert: inference latency > 200ms SLA
+      - alert: HighInferenceLatency
+        expr: histogram_quantile(0.95, rate(inference_latency_seconds_bucket[5m])) > 0.2
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Inference latency above 200ms SLA"
+          description: "P95 latency is {{ $value | humanizeDuration }}"
+
+      # Alert: error rate > 5% (from guidelines)
+      - alert: HighErrorRate
+        expr: rate(api_requests_total{status=~"5.."}[5m]) / rate(api_requests_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API error rate above 5%"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+
+      # Alert: data drift detected
+      - alert: DataDriftDetected
+        expr: increase(drift_detected_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Input data drift detected"
+          description: "Drift detected in category {{ $labels.category }}"
+
+      # Alert: API down
+      - alert: APIDown
+        expr: up{job="defect-api"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Defect detection API is down"
+          description: "metrics-api has been unreachable for 30s"
+
+      # Alert: high defect rate (model performance decay signal)
+      - alert: HighDefectRate
+        expr: rate(defects_detected_total[10m]) / (rate(defects_detected_total[10m]) + rate(normal_detected_total[10m])) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unusually high defect detection rate"
+          description: "Over 80% of recent predictions are defective — possible model drift"

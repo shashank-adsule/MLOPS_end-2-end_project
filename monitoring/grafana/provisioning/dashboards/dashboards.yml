@@ -1,0 +1,13 @@
+# monitoring/grafana/provisioning/dashboards/dashboards.yml
+apiVersion: 1
+
+providers:
+  - name: 'defect-detection'
+    orgId: 1
+    folder: 'Defect Detection'
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

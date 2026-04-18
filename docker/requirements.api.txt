@@ -1,0 +1,20 @@
+# docker/requirements.api.txt
+# Installed inside Docker container.
+# NOTE: torch and torchvision are NOT listed here —
+# they come pre-installed in the pytorch/pytorch base image.
+
+# Computer vision
+Pillow==10.3.0
+
+# ML utilities
+numpy==1.26.4
+scikit-learn==1.4.2
+scipy==1.13.0
+tqdm==4.66.4
+
+# MLflow
+mlflow==2.12.2
+
+# Utilities
+python-dotenv==1.0.1
+PyYAML==6.0.1

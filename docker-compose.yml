@@ -1,0 +1,213 @@
+# docker-compose.yml
+# -------------------
+# Full MLOps stack for Surface Defect Detection
+#
+# Services:
+#   1. mlflow        - Experiment tracking     (port 5000)
+#   2. streamlit     - Frontend UI + /metrics  (port 8501 + 8000)
+#   3. prometheus    - Metrics scraping         (port 9090)
+#   4. alertmanager  - Alert routing            (port 9093)
+#   5. grafana       - Dashboards               (port 3001)
+#   6. airflow       - Pipeline orchestration   (port 8080)
+#
+# Usage:
+#   docker compose up --build
+#   docker compose down -v
+
+services:
+
+  # --------------------------------------------------------------------------
+  # 1. MLflow — experiment tracking + model registry
+  #    UI: http://localhost:5000
+  # --------------------------------------------------------------------------
+  mlflow:
+    image: python:3.10-slim
+    container_name: mlflow
+    working_dir: /mlflow
+    command: >
+      bash -c "pip install mlflow==2.12.2 --quiet &&
+               mlflow server
+                 --host 0.0.0.0
+                 --port 5000
+                 --backend-store-uri sqlite:///mlflow.db
+                 --default-artifact-root /mlflow/artifacts"
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - defect_net
+
+  # --------------------------------------------------------------------------
+  # 2. Streamlit — frontend UI + Prometheus metrics on port 8000
+  #    UI:      http://localhost:8501
+  #    Metrics: http://localhost:8000/metrics
+  # --------------------------------------------------------------------------
+  streamlit:
+    build:
+      context: .
+      dockerfile: docker/streamlit.Dockerfile
+    container_name: streamlit
+    environment:
+      - PYTHONPATH=/app
+      - MODEL_PATH=/app/models
+      - PROCESSED_DATA_DIR=/app/data/processed
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    volumes:
+      - ./src:/app/src
+      - ./models:/app/models
+      - ./data:/app/data
+      - ./params.yaml:/app/params.yaml
+      - ./reports:/app/reports
+    ports:
+      - "8501:8501"    # Streamlit UI
+      - "8000:8000"    # Prometheus metrics endpoint
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - defect_net
+
+  # --------------------------------------------------------------------------
+  # 3. Prometheus — scrapes metrics from Streamlit container
+  #    UI: http://localhost:9090
+  # --------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-admin-api"
+    ports:
+      - "9090:9090"
+    depends_on:
+      - streamlit
+    restart: unless-stopped
+    networks:
+      - defect_net
+
+  # --------------------------------------------------------------------------
+  # 4. Alertmanager — routes Prometheus alerts
+  #    UI: http://localhost:9093
+  # --------------------------------------------------------------------------
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: alertmanager
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    ports:
+      - "9093:9093"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - defect_net
+
+  # --------------------------------------------------------------------------
+  # 5. Grafana — dashboards + visualization
+  #    UI: http://localhost:3001  (admin/admin)
+  # --------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_UNIFIED_ALERTING_ENABLED=true
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - defect_net
+
+  # --------------------------------------------------------------------------
+  # 6. Airflow — data pipeline orchestration
+  #    UI: http://localhost:8080  (admin/admin)
+  # --------------------------------------------------------------------------
+  airflow:
+    image: apache/airflow:2.9.1-python3.10
+    container_name: airflow
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
+      - AIRFLOW__WEBSERVER__SECRET_KEY=defect-detection-secret-key
+      - PYTHONPATH=/opt/airflow
+      - RAW_DATA_DIR=/app/data/raw/mvtec_ad
+      - PROCESSED_DATA_DIR=/app/data/processed
+    volumes:
+      - ./src/pipeline:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./data:/app/data
+      - airflow_logs:/opt/airflow/logs
+    ports:
+      - "8080:8080"
+    command: >
+      bash -c "pip install torch torchvision Pillow numpy
+                           scikit-learn tqdm mlflow --quiet &&
+               airflow db init &&
+               airflow users create
+                 --username admin --password admin
+                 --firstname Admin --lastname User
+                 --role Admin --email admin@example.com || true &&
+               airflow scheduler &
+               airflow webserver --port 8080"
+    restart: unless-stopped
+    networks:
+      - defect_net
+
+# ---------------------------------------------------------------------------
+# Volumes
+# ---------------------------------------------------------------------------
+volumes:
+  mlflow_data:
+  prometheus_data:
+  alertmanager_data:
+  grafana_data:
+  airflow_logs:
+
+# ---------------------------------------------------------------------------
+# Networks
+# ---------------------------------------------------------------------------
+networks:
+  defect_net:
+    driver: bridge

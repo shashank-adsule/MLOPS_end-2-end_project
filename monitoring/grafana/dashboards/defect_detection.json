@@ -1,0 +1,154 @@
+{
+  "title": "Surface Defect Detection",
+  "uid": "defect-detection-main",
+  "version": 1,
+  "schemaVersion": 38,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Total Predictions",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{
+        "expr": "sum(api_requests_total{endpoint='/predict', status='200'})",
+        "legendFormat": "Total"
+      }],
+      "options": { "colorMode": "background", "graphMode": "area" }
+    },
+    {
+      "id": 2,
+      "title": "Defects Detected",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [{
+        "expr": "sum(defects_detected_total)",
+        "legendFormat": "Defects"
+      }],
+      "options": { "colorMode": "background", "graphMode": "area",
+        "thresholds": { "steps": [
+          { "color": "green", "value": null },
+          { "color": "red", "value": 1 }
+        ]}
+      }
+    },
+    {
+      "id": 3,
+      "title": "P95 Inference Latency",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, rate(inference_latency_seconds_bucket[5m])) * 1000",
+        "legendFormat": "P95 ms"
+      }],
+      "options": { "colorMode": "background",
+        "thresholds": { "steps": [
+          { "color": "green", "value": null },
+          { "color": "yellow", "value": 100 },
+          { "color": "red", "value": 200 }
+        ]}
+      },
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "id": 4,
+      "title": "Drift Detections",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [{
+        "expr": "sum(drift_detected_total)",
+        "legendFormat": "Drift Events"
+      }],
+      "options": { "colorMode": "background",
+        "thresholds": { "steps": [
+          { "color": "green", "value": null },
+          { "color": "orange", "value": 1 }
+        ]}
+      }
+    },
+    {
+      "id": 5,
+      "title": "Inference Latency Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(inference_latency_seconds_bucket[5m])) * 1000",
+          "legendFormat": "P50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(inference_latency_seconds_bucket[5m])) * 1000",
+          "legendFormat": "P95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(inference_latency_seconds_bucket[5m])) * 1000",
+          "legendFormat": "P99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "id": 6,
+      "title": "Request Rate by Category",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [{
+        "expr": "rate(api_requests_total{endpoint='/predict', status='200'}[5m])",
+        "legendFormat": "{{ category }}"
+      }],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 7,
+      "title": "Anomaly Score Distribution",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [{
+        "expr": "anomaly_score_last",
+        "legendFormat": "{{ category }}"
+      }]
+    },
+    {
+      "id": 8,
+      "title": "Error Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [{
+        "expr": "rate(api_errors_total[5m])",
+        "legendFormat": "{{ error_type }}"
+      }],
+      "fieldConfig": { "defaults": { "unit": "errors/s" } }
+    },
+    {
+      "id": 9,
+      "title": "Models Loaded",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 20 },
+      "targets": [{
+        "expr": "models_loaded_total",
+        "legendFormat": "Models"
+      }]
+    },
+    {
+      "id": 10,
+      "title": "Active Requests",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 20 },
+      "targets": [{
+        "expr": "active_requests",
+        "legendFormat": "Active"
+      }]
+    },
+    {
+      "id": 11,
+      "title": "Data Drift Z-Score",
+      "type": "timeseries",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 20 },
+      "targets": [{
+        "expr": "drift_z_score_last",
+        "legendFormat": "{{ category }}"
+      }]
+    }
+  ]
+}
