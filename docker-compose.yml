@@ -8,18 +8,10 @@
 #   3. prometheus    - Metrics scraping         (port 9090)
 #   4. alertmanager  - Alert routing            (port 9093)
 #   5. grafana       - Dashboards               (port 3001)
-#   6. airflow       - Pipeline orchestration   (port 8080)
-#
-# Usage:
-#   docker compose up --build
-#   docker compose down -v
+#   6. airflow       - Pipeline orchestration   (port 8081)
 
 services:
 
-  # --------------------------------------------------------------------------
-  # 1. MLflow — experiment tracking + model registry
-  #    UI: http://localhost:5000
-  # --------------------------------------------------------------------------
   mlflow:
     image: python:3.10-slim
     container_name: mlflow
@@ -36,20 +28,15 @@ services:
     volumes:
       - mlflow_data:/mlflow
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:5000/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 60s
     restart: unless-stopped
     networks:
       - defect_net
 
-  # --------------------------------------------------------------------------
-  # 2. Streamlit — frontend UI + Prometheus metrics on port 8000
-  #    UI:      http://localhost:8501
-  #    Metrics: http://localhost:8000/metrics
-  # --------------------------------------------------------------------------
   streamlit:
     build:
       context: .
@@ -67,25 +54,20 @@ services:
       - ./params.yaml:/app/params.yaml
       - ./reports:/app/reports
     ports:
-      - "8501:8501"    # Streamlit UI
-      - "8000:8000"    # Prometheus metrics endpoint
+      - "8501:8501"
+      - "8000:8000"
     depends_on:
-      mlflow:
-        condition: service_healthy
+      - mlflow
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8501/_stcore/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 40s
+      start_period: 60s
     restart: unless-stopped
     networks:
       - defect_net
 
-  # --------------------------------------------------------------------------
-  # 3. Prometheus — scrapes metrics from Streamlit container
-  #    UI: http://localhost:9090
-  # --------------------------------------------------------------------------
   prometheus:
     image: prom/prometheus:v2.52.0
     container_name: prometheus
@@ -107,10 +89,6 @@ services:
     networks:
       - defect_net
 
-  # --------------------------------------------------------------------------
-  # 4. Alertmanager — routes Prometheus alerts
-  #    UI: http://localhost:9093
-  # --------------------------------------------------------------------------
   alertmanager:
     image: prom/alertmanager:v0.27.0
     container_name: alertmanager
@@ -128,10 +106,6 @@ services:
     networks:
       - defect_net
 
-  # --------------------------------------------------------------------------
-  # 5. Grafana — dashboards + visualization
-  #    UI: http://localhost:3001  (admin/admin)
-  # --------------------------------------------------------------------------
   grafana:
     image: grafana/grafana:10.4.2
     container_name: grafana
@@ -149,7 +123,7 @@ services:
     depends_on:
       - prometheus
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -158,10 +132,6 @@ services:
     networks:
       - defect_net
 
-  # --------------------------------------------------------------------------
-  # 6. Airflow — data pipeline orchestration
-  #    UI: http://localhost:8080  (admin/admin)
-  # --------------------------------------------------------------------------
   airflow:
     image: apache/airflow:2.9.1-python3.10
     container_name: airflow
@@ -180,7 +150,7 @@ services:
       - ./data:/app/data
       - airflow_logs:/opt/airflow/logs
     ports:
-      - "8080:8080"
+      - "8081:8080"
     command: >
       bash -c "pip install torch torchvision Pillow numpy
                            scikit-learn tqdm mlflow --quiet &&
@@ -195,9 +165,6 @@ services:
     networks:
       - defect_net
 
-# ---------------------------------------------------------------------------
-# Volumes
-# ---------------------------------------------------------------------------
 volumes:
   mlflow_data:
   prometheus_data:
@@ -205,9 +172,6 @@ volumes:
   grafana_data:
   airflow_logs:
 
-# ---------------------------------------------------------------------------
-# Networks
-# ---------------------------------------------------------------------------
 networks:
   defect_net:
     driver: bridge

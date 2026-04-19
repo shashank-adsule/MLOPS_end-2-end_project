@@ -32,7 +32,7 @@ RUN pip install --no-cache-dir --timeout 300 --retries 5 \
 
 # Step 3: Install streamlit
 RUN pip install --no-cache-dir --timeout 300 --retries 5 \
-    streamlit==1.33.0 \
+    streamlit\
     pandas==2.2.2 \
     prometheus-client==0.20.0
 

@@ -226,6 +226,10 @@ mlruns/
 # Reports
 reports/
 
+
+# env files
+.env
+
 # OS
 .DS_Store
 Thumbs.db
