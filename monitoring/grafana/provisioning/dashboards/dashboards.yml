@@ -2,12 +2,14 @@
 apiVersion: 1
 
 providers:
-  - name: 'defect-detection'
+  - name: defect-detection
     orgId: 1
-    folder: 'Defect Detection'
+    folder: Defect Detection
+    folderUid: defect-detection
     type: file
     disableDeletion: false
     editable: true
-    updateIntervalSeconds: 30
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
     options:
       path: /var/lib/grafana/dashboards
