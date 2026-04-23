@@ -14,8 +14,7 @@ rule_files:
 
 scrape_configs:
 
-  # Scrape Prometheus metrics from Streamlit app
-  # Streamlit exposes /metrics on port 8000 via prometheus_client
+  # Streamlit app exposes /metrics on port 8000 via prometheus_client
   - job_name: "defect-app"
     static_configs:
       - targets: ["streamlit:8000"]
@@ -27,9 +26,14 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  # MLflow health check
+  # MLflow — use / not /health (mlflow has no /health endpoint)
   - job_name: "mlflow"
     static_configs:
       - targets: ["mlflow:5000"]
-    metrics_path: /health
+    metrics_path: /
     scrape_interval: 30s
+    # mlflow doesn't expose prometheus metrics, this just checks it's up
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        action: drop
+        regex: ".*"

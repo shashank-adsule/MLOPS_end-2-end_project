@@ -1,8 +1,7 @@
 # monitoring/alertmanager.yml
 # ----------------------------
 # Alertmanager routes alerts from Prometheus to receivers.
-# Currently configured to log alerts (null receiver).
-# Add email/slack config below for real notifications.
+# NOTE: webhook URLs must use container names, not localhost, inside Docker.
 
 global:
   resolve_timeout: 5m
@@ -15,14 +14,12 @@ route:
   receiver: 'default'
 
   routes:
-    # Critical alerts fire immediately
     - match:
         severity: critical
       receiver: 'critical-alerts'
       group_wait: 10s
       repeat_interval: 1h
 
-    # Warning alerts grouped
     - match:
         severity: warning
       receiver: 'warning-alerts'
@@ -30,21 +27,12 @@ route:
 
 receivers:
 
+  # Null receiver — just logs the alert, no external notification
   - name: 'default'
-    # Logs alert — replace with email/slack below
-    webhook_configs:
-      - url: 'http://localhost:9093/api/v2/alerts'
-        send_resolved: true
 
   - name: 'critical-alerts'
-    webhook_configs:
-      - url: 'http://localhost:9093/api/v2/alerts'
-        send_resolved: true
 
   - name: 'warning-alerts'
-    webhook_configs:
-      - url: 'http://localhost:9093/api/v2/alerts'
-        send_resolved: true
 
   # Uncomment to add email notifications:
   # - name: 'email-alerts'

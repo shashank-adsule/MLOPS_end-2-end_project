@@ -12,27 +12,29 @@
 
 services:
 
+  # ── FIX 1: Use official mlflow image (binds to 0.0.0.0 correctly) ─────────
+  # python:3.10-slim + pip install was binding gunicorn to 127.0.0.1,
+  # making the port unreachable from Docker host even though it was mapped.
   mlflow:
-    image: python:3.10-slim
+    image: ghcr.io/mlflow/mlflow:v2.12.2
     container_name: mlflow
     working_dir: /mlflow
     command: >
-      bash -c "pip install mlflow==2.12.2 --quiet &&
-               mlflow server
-                 --host 0.0.0.0
-                 --port 5000
-                 --backend-store-uri sqlite:///mlflow.db
-                 --default-artifact-root /mlflow/artifacts"
+      mlflow server
+        --host 0.0.0.0
+        --port 5000
+        --backend-store-uri sqlite:////mlflow/mlflow.db
+        --default-artifact-root /mlflow/artifacts
     ports:
       - "5000:5000"
     volumes:
       - mlflow_data:/mlflow
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:5000/ || exit 1"]
-      interval: 30s
+      interval: 20s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 30s
     restart: unless-stopped
     networks:
       - defect_net
@@ -57,7 +59,8 @@ services:
       - "8501:8501"
       - "8000:8000"
     depends_on:
-      - mlflow
+      mlflow:
+        condition: service_healthy       # wait until mlflow is truly ready
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8501/_stcore/health || exit 1"]
       interval: 15s
@@ -68,6 +71,7 @@ services:
     networks:
       - defect_net
 
+  # ── FIX 2: Wait for streamlit to be healthy before starting ───────────────
   prometheus:
     image: prom/prometheus:v2.52.0
     container_name: prometheus
@@ -84,7 +88,8 @@ services:
     ports:
       - "9090:9090"
     depends_on:
-      - streamlit
+      streamlit:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - defect_net
@@ -132,8 +137,11 @@ services:
     networks:
       - defect_net
 
+  # ── FIX 3: Pre-bake deps via Dockerfile, fix db migrate + sequencing ──────
   airflow:
-    image: apache/airflow:2.9.1-python3.10
+    build:
+      context: .
+      dockerfile: docker/airflow.Dockerfile
     container_name: airflow
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
@@ -141,6 +149,7 @@ services:
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
       - AIRFLOW__WEBSERVER__SECRET_KEY=defect-detection-secret-key
+      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
       - PYTHONPATH=/opt/airflow
       - RAW_DATA_DIR=/app/data/raw/mvtec_ad
       - PROCESSED_DATA_DIR=/app/data/processed
@@ -151,16 +160,29 @@ services:
       - airflow_logs:/opt/airflow/logs
     ports:
       - "8081:8080"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     command: >
-      bash -c "pip install torch torchvision Pillow numpy
-                           scikit-learn tqdm mlflow --quiet &&
-               airflow db init &&
-               airflow users create
-                 --username admin --password admin
-                 --firstname Admin --lastname User
-                 --role Admin --email admin@example.com || true &&
-               airflow scheduler &
-               airflow webserver --port 8080"
+      bash -c "
+        airflow db migrate &&
+        airflow users create
+          --username admin --password admin
+          --firstname Admin --lastname User
+          --role Admin --email admin@example.com 2>/dev/null || true &&
+        airflow scheduler &
+        exec airflow webserver --port 8080
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
     restart: unless-stopped
     networks:
       - defect_net
