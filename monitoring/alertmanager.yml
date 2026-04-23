@@ -1,8 +1,4 @@
 # monitoring/alertmanager.yml
-# ----------------------------
-# Alertmanager routes alerts from Prometheus to receivers.
-# NOTE: webhook URLs must use container names, not localhost, inside Docker.
-
 global:
   resolve_timeout: 5m
 
@@ -19,29 +15,15 @@ route:
       receiver: 'critical-alerts'
       group_wait: 10s
       repeat_interval: 1h
-
     - match:
         severity: warning
       receiver: 'warning-alerts'
       repeat_interval: 4h
 
 receivers:
-
-  # Null receiver — just logs the alert, no external notification
   - name: 'default'
-
   - name: 'critical-alerts'
-
   - name: 'warning-alerts'
-
-  # Uncomment to add email notifications:
-  # - name: 'email-alerts'
-  #   email_configs:
-  #     - to: 'your-email@example.com'
-  #       from: 'alertmanager@example.com'
-  #       smarthost: 'smtp.gmail.com:587'
-  #       auth_username: 'your-email@gmail.com'
-  #       auth_password: 'your-app-password'
 
 inhibit_rules:
   - source_match:

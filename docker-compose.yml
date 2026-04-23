@@ -1,20 +1,6 @@
 # docker-compose.yml
-# -------------------
-# Full MLOps stack for Surface Defect Detection
-#
-# Services:
-#   1. mlflow        - Experiment tracking     (port 5000)
-#   2. streamlit     - Frontend UI + /metrics  (port 8501 + 8000)
-#   3. prometheus    - Metrics scraping         (port 9090)
-#   4. alertmanager  - Alert routing            (port 9093)
-#   5. grafana       - Dashboards               (port 3001)
-#   6. airflow       - Pipeline orchestration   (port 8081)
-
 services:
 
-  # ── FIX 1: Use official mlflow image (binds to 0.0.0.0 correctly) ─────────
-  # python:3.10-slim + pip install was binding gunicorn to 127.0.0.1,
-  # making the port unreachable from Docker host even though it was mapped.
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.12.2
     container_name: mlflow
@@ -31,47 +17,14 @@ services:
       - mlflow_data:/mlflow
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:5000/ || exit 1"]
-      interval: 20s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: unless-stopped
-    networks:
-      - defect_net
-
-  streamlit:
-    build:
-      context: .
-      dockerfile: docker/streamlit.Dockerfile
-    container_name: streamlit
-    environment:
-      - PYTHONPATH=/app
-      - MODEL_PATH=/app/models
-      - PROCESSED_DATA_DIR=/app/data/processed
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-    volumes:
-      - ./src:/app/src
-      - ./models:/app/models
-      - ./data:/app/data
-      - ./params.yaml:/app/params.yaml
-      - ./reports:/app/reports
-    ports:
-      - "8501:8501"
-      - "8000:8000"
-    depends_on:
-      mlflow:
-        condition: service_healthy       # wait until mlflow is truly ready
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8501/_stcore/health || exit 1"]
       interval: 15s
-      timeout: 5s
-      retries: 5
+      timeout: 10s
+      retries: 10
       start_period: 60s
     restart: unless-stopped
     networks:
       - defect_net
 
-  # ── FIX 2: Wait for streamlit to be healthy before starting ───────────────
   prometheus:
     image: prom/prometheus:v2.52.0
     container_name: prometheus
@@ -87,9 +40,6 @@ services:
       - "--web.enable-admin-api"
     ports:
       - "9090:9090"
-    depends_on:
-      streamlit:
-        condition: service_healthy
     restart: unless-stopped
     networks:
       - defect_net
@@ -137,7 +87,25 @@ services:
     networks:
       - defect_net
 
-  # ── FIX 3: Pre-bake deps via Dockerfile, fix db migrate + sequencing ──────
+  # ── Postgres: replaces SQLite for Airflow (SQLite breaks under concurrency)
+  postgres:
+    image: postgres:15-alpine
+    container_name: airflow_postgres
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - defect_net
+
   airflow:
     build:
       context: .
@@ -145,11 +113,13 @@ services:
     container_name: airflow
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
       - AIRFLOW__WEBSERVER__SECRET_KEY=defect-detection-secret-key
       - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
+      - AIRFLOW__WEBSERVER__WORKER_REFRESH_INTERVAL=30
+      - AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT=300
       - PYTHONPATH=/opt/airflow
       - RAW_DATA_DIR=/app/data/raw/mvtec_ad
       - PROCESSED_DATA_DIR=/app/data/processed
@@ -160,29 +130,31 @@ services:
       - airflow_logs:/opt/airflow/logs
     ports:
       - "8081:8080"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    depends_on:
+      postgres:
+        condition: service_healthy
     command: >
       bash -c "
+        echo '>>> Initializing Airflow DB...' &&
         airflow db migrate &&
+        echo '>>> Creating admin user...' &&
         airflow users create
           --username admin --password admin
           --firstname Admin --lastname User
-          --role Admin --email admin@example.com 2>/dev/null || true &&
+          --role Admin --email da25m005@2002@gmail.com 2>/dev/null || true &&
+        echo '>>> Starting scheduler in background...' &&
         airflow scheduler &
+        echo '>>> Waiting 20s for scheduler...' &&
+        sleep 20 &&
+        echo '>>> Starting webserver...' &&
         exec airflow webserver --port 8080
       "
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 90s
+      timeout: 15s
+      retries: 10
+      start_period: 120s
     restart: unless-stopped
     networks:
       - defect_net
@@ -193,6 +165,7 @@ volumes:
   alertmanager_data:
   grafana_data:
   airflow_logs:
+  postgres_data:        # ← new
 
 networks:
   defect_net:

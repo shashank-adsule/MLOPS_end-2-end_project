@@ -3,7 +3,7 @@
     "list": []
   },
   "title": "Surface Defect Detection — MLOps Dashboard",
-  "uid": "defect-detection-main",
+  "uid": "prometheus",
   "version": 1,
   "schemaVersion": 38,
   "refresh": "10s",
@@ -707,6 +707,10 @@
           "normal": false,
           "pending": true
         }
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
       }
     }
   ]

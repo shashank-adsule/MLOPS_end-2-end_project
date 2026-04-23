@@ -26,72 +26,114 @@ load_dotenv()
 # Prometheus — lazy singleton pattern to survive Streamlit reloads
 # ---------------------------------------------------------------------------
 from prometheus_client import (
-    start_http_server,
-    Counter,
-    Histogram,
-    Gauge,
-    REGISTRY,
-    CollectorRegistry,
+    Counter, Histogram, Gauge, REGISTRY,
+    generate_latest, CONTENT_TYPE_LATEST,
 )
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
-_METRICS = {}
+# ---------------------------------------------------------------------------
+# APP DOWN state file — shared between Streamlit UI and metrics HTTP server
+# Writing to a file is the only reliable way to share state in Streamlit
+# since each rerun/thread gets its own copy of module-level variables.
+# ---------------------------------------------------------------------------
+import tempfile, pathlib
+
+_STATE_FILE = pathlib.Path(tempfile.gettempdir()) / "app_down_state.txt"
+
+def _set_app_down(value: int):
+    """Write 0 or 1 to the shared state file."""
+    _STATE_FILE.write_text(str(value))
+
+def _get_app_down_value() -> int:
+    """Read current app_down state from file (0=up, 1=down)."""
+    try:
+        return int(_STATE_FILE.read_text().strip())
+    except Exception:
+        return 0
+
+# Initialize to 0 if file doesn't exist
+if not _STATE_FILE.exists():
+    _set_app_down(0)
+
+# ---------------------------------------------------------------------------
+# Metrics — created at module level with try/except for hot-reload safety
+# ---------------------------------------------------------------------------
+try:
+    _M_PREDICT  = Counter("predictions_total",           "Total predictions",   ["category", "verdict"])
+    _M_LATENCY  = Histogram("inference_latency_seconds", "Inference latency",   ["category"],
+                             buckets=[0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0, 2.0])
+    _M_SCORE    = Gauge("anomaly_score_last",            "Last anomaly score",  ["category"])
+    _M_DRIFT    = Counter("drift_detected_total",        "Drift detections",    ["category"])
+    _M_DEFECTS  = Counter("defects_detected_total",      "Total defects",       ["category"])
+    _M_NORMAL   = Counter("normal_detected_total",       "Total normal",        ["category"])
+    _M_APP_DOWN = Gauge("app_down_manual",               "APP DOWN flag 1=down 0=up")
+    _M_APP_DOWN.set(0)
+except ValueError:
+    _cols = REGISTRY._names_to_collectors
+    _M_PREDICT  = _cols.get("predictions_total_total",          _cols.get("predictions_total"))
+    _M_LATENCY  = _cols.get("inference_latency_seconds_bucket", _cols.get("inference_latency_seconds"))
+    _M_SCORE    = _cols.get("anomaly_score_last")
+    _M_DRIFT    = _cols.get("drift_detected_total_total",       _cols.get("drift_detected_total"))
+    _M_DEFECTS  = _cols.get("defects_detected_total_total",     _cols.get("defects_detected_total"))
+    _M_NORMAL   = _cols.get("normal_detected_total_total",      _cols.get("normal_detected_total"))
+    _M_APP_DOWN = _cols.get("app_down_manual")
+
 
 def _get_metrics():
-    """Return metrics dict, creating once and reusing across reloads."""
-    global _METRICS
-    if _METRICS:
-        return _METRICS
-
-    def _safe_counter(name, desc, labels):
-        try:
-            return Counter(name, desc, labels)
-        except ValueError:
-            # Already registered — find and return it
-            for n, c in REGISTRY._names_to_collectors.items():
-                if n == name + "_total":
-                    return c
-            return Counter(name, desc, labels)
-
-    def _safe_histogram(name, desc, labels, buckets):
-        try:
-            return Histogram(name, desc, labels, buckets=buckets)
-        except ValueError:
-            for n, c in REGISTRY._names_to_collectors.items():
-                if n == name + "_bucket":
-                    return c
-            return Histogram(name, desc, labels, buckets=buckets)
-
-    def _safe_gauge(name, desc, labels):
-        try:
-            return Gauge(name, desc, labels)
-        except ValueError:
-            for n, c in REGISTRY._names_to_collectors.items():
-                if n == name:
-                    return c
-            return Gauge(name, desc, labels)
-
-    _METRICS = {
-        "predict":  _safe_counter("predictions_total", "Total predictions", ["category", "verdict"]),
-        "latency":  _safe_histogram("inference_latency_seconds", "Inference latency", ["category"], [0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0, 2.0]),
-        "score":    _safe_gauge("anomaly_score_last", "Last anomaly score", ["category"]),
-        "drift":    _safe_counter("drift_detected_total", "Drift detections", ["category"]),
-        "defects":  _safe_counter("defects_detected_total", "Total defects", ["category"]),
-        "normal":   _safe_counter("normal_detected_total", "Total normal", ["category"]),
+    return {
+        "predict": _M_PREDICT,
+        "latency": _M_LATENCY,
+        "score":   _M_SCORE,
+        "drift":   _M_DRIFT,
+        "defects": _M_DEFECTS,
+        "normal":  _M_NORMAL,
     }
-    return _METRICS
 
 
-def _start_metrics_server(port: int = 8000):
+def _get_app_down_gauge():
+    return _M_APP_DOWN
+
+
+# ---------------------------------------------------------------------------
+# Custom metrics HTTP server — reads app_down state from file on every scrape
+# so the value is always current regardless of which thread set it.
+# ---------------------------------------------------------------------------
+class _MetricsHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/metrics":
+            # Sync file state → gauge before generating output
+            try:
+                val = _get_app_down_value()
+                if _M_APP_DOWN is not None:
+                    _M_APP_DOWN.set(val)
+            except Exception:
+                pass
+            output = generate_latest(REGISTRY)
+            self.send_response(200)
+            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+            self.end_headers()
+            self.wfile.write(output)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass  # suppress access logs
+
+
+def _run_metrics_server():
     try:
-        start_http_server(port)
+        server = HTTPServer(("0.0.0.0", 8000), _MetricsHandler)
+        server.serve_forever()
     except OSError:
-        pass  # Already running
+        pass  # port already in use
 
 
 # Start metrics server once per process
-if not globals().get("_METRICS_STARTED", False):
-    threading.Thread(target=_start_metrics_server, daemon=True).start()
+if not globals().get("_METRICS_STARTED"):
     globals()["_METRICS_STARTED"] = True
+    _t = threading.Thread(target=_run_metrics_server, daemon=True)
+    _t.start()
 
 # ---------------------------------------------------------------------------
 # Streamlit page config — MUST be first st call
@@ -234,6 +276,38 @@ with st.sidebar:
     st.markdown("📊 [Grafana](http://localhost:3001)")
     st.markdown("🔥 [Prometheus](http://localhost:9090)")
     st.markdown("🔔 [Alertmanager](http://localhost:9093)")
+
+    # ── APP DOWN Manual Alert Control ────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🚨 Alert Control")
+
+    # Track app_down state in session
+    if "app_down_active" not in st.session_state:
+        st.session_state.app_down_active = False
+
+    if not st.session_state.app_down_active:
+        st.success("🟢 App Status: **RUNNING**")
+        if st.button("🔴 Trigger APP DOWN Alert", type="primary", use_container_width=True):
+            try:
+                m = _get_metrics()
+                _set_app_down(1)  # write to file — metrics server reads this on next scrape
+                st.session_state.app_down_active = True
+                st.rerun()
+            except Exception as e:
+                st.error(f"Metrics error: {e}")
+    else:
+        st.error("🔴 App Status: **DOWN**")
+        st.caption("Alert firing on Prometheus → Alertmanager → Grafana")
+        st.markdown("**Trigger Airflow response DAG:**")
+        st.markdown("👉 [Open Airflow](http://localhost:8081/dags/app_down_response/grid) → Trigger DAG")
+        if st.button("✅ Resolve — Mark App as UP", type="secondary", use_container_width=True):
+            try:
+                m = _get_metrics()
+                _set_app_down(0)  # write to file — metrics server reads this on next scrape
+                st.session_state.app_down_active = False
+                st.rerun()
+            except Exception as e:
+                st.error(f"Metrics error: {e}")
     st.markdown("---")
     st.markdown("### Links")
     st.markdown("🔗 [MLflow](http://localhost:5000)")
