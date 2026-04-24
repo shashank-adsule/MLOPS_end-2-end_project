@@ -97,8 +97,10 @@ def train_category(
     reports_dir: str,
     category_index: int,
     total_categories: int,
+    local_client=None,
+    local_exp_id=None,
 ) -> Dict:
-    """Train PatchCore for one category and log everything to MLflow."""
+    """Train PatchCore for one category and log to DagsHub + local MLflow."""
 
     print(f"\n{'='*65}")
     print(f"  [{category_index}/{total_categories}] Starting: {category.upper()}")
@@ -291,6 +293,49 @@ def train_category(
 
         metrics["category"] = category
         metrics["run_id"]   = run_id
+
+        # ── Log to LOCAL MLflow as well ──────────────────────────────────
+        if local_client and local_exp_id:
+            try:
+                local_run = local_client.create_run(
+                    experiment_id=local_exp_id,
+                    run_name=f"patchcore_{category}",
+                )
+                lid = local_run.info.run_id
+
+                # Params
+                for k, v in {
+                    "category":      category,
+                    "backbone":      params["model"]["backbone"],
+                    "layers":        str(params["model"]["layers"]),
+                    "coreset_ratio": params["model"]["coreset_ratio"],
+                    "image_size":    params["model"]["image_size"],
+                    "batch_size":    params["training"]["batch_size"],
+                    "device":        "cuda" if torch.cuda.is_available() else "cpu",
+                }.items():
+                    local_client.log_param(lid, k, v)
+
+                # Metrics
+                for k, v in {
+                    "auroc":          metrics["auroc"],
+                    "f1_score":       metrics["f1_score"],
+                    "pixel_auroc":    metrics["pixel_auroc"],
+                    "avg_latency_ms": metrics["avg_latency_ms"],
+                    "threshold":      metrics["threshold"],
+                }.items():
+                    local_client.log_metric(lid, k, v)
+
+                # Tags
+                local_client.set_tag(lid, "category",  category)
+                local_client.set_tag(lid, "algorithm", "PatchCore")
+                local_client.set_tag(lid, "dataset",   "MVTec AD")
+                local_client.set_tag(lid, "dagshub_run_id", run_id)
+
+                local_client.set_terminated(lid, status="FINISHED")
+                print(f"       Local MLflow run logged: {lid}")
+            except Exception as e:
+                print(f"       Local MLflow logging failed: {e}")
+
         return metrics
 
 
@@ -344,21 +389,40 @@ def main():
     print(f"{'#'*65}\n")
 
     # ----------------------------------------------------------------
-    # Configure MLflow → DagsHub
+    # Configure MLflow — logs to BOTH DagsHub AND local MLflow
     # ----------------------------------------------------------------
     dagshub_token = os.environ.get("DAGSHUB_TOKEN", "")
+    dagshub_uri   = "https://dagshub.com/da25m005/MLOPS_end-2-end_project.mlflow"
+    local_uri     = os.environ.get("MLFLOW_LOCAL_URI", "http://localhost:5000")
+
     if dagshub_token:
         os.environ["MLFLOW_TRACKING_USERNAME"] = "da25m005"
         os.environ["MLFLOW_TRACKING_PASSWORD"] = dagshub_token
         print(f"MLflow auth     : DagsHub token loaded from .env")
     else:
-        print(f"WARNING: DAGSHUB_TOKEN not found in .env — MLflow may fail")
+        print(f"WARNING: DAGSHUB_TOKEN not found — DagsHub logging may fail")
 
-    tracking_uri = "https://dagshub.com/da25m005/MLOPS_end-2-end_project.mlflow"
-    mlflow.set_tracking_uri(tracking_uri)
+    # Primary tracking URI = DagsHub (used by mlflow.start_run)
+    mlflow.set_tracking_uri(dagshub_uri)
     mlflow.set_experiment("patchcore-mvtec-ad")
-    print(f"MLflow URI      : {tracking_uri}")
-    print(f"MLflow experiment: patchcore-mvtec-ad")
+
+    # Secondary client for local MLflow
+    local_client = mlflow.tracking.MlflowClient(tracking_uri=local_uri)
+    try:
+        exps = local_client.search_experiments()
+        exp_names = [e.name for e in exps]
+        if "patchcore-mvtec-ad" not in exp_names:
+            local_client.create_experiment("patchcore-mvtec-ad")
+        local_exp = local_client.get_experiment_by_name("patchcore-mvtec-ad")
+        local_exp_id = local_exp.experiment_id
+        print(f"Local MLflow    : {local_uri} — experiment ready")
+    except Exception as e:
+        local_client  = None
+        local_exp_id  = None
+        print(f"Local MLflow    : UNAVAILABLE ({e}) — skipping local logging")
+
+    print(f"DagsHub MLflow  : {dagshub_uri}")
+    print(f"Local MLflow    : {local_uri}")
     print(f"Categories      : {categories}\n")
 
     # ----------------------------------------------------------------
@@ -377,6 +441,8 @@ def main():
                 reports_dir=reports_dir,
                 category_index=i,
                 total_categories=len(categories),
+                local_client=local_client,
+                local_exp_id=local_exp_id,
             )
             all_metrics.append(metrics)
         except Exception as e:
@@ -411,7 +477,7 @@ def main():
         )
     print(f"{'='*65}")
     print(f"\nSummary saved  : {summary_path}")
-    print(f"MLflow runs    : {tracking_uri}")
+    print(f"MLflow runs    : {dagshub_uri }")
     print(f"Next step      : python -m src.api.main")
 
 
