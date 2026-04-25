@@ -1,0 +1,233 @@
+name: CI — Surface Defect Detection MLOps
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # JOB 1 — Lint & Static Analysis
+  # ─────────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint & Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: lint-${{ hashFiles('requirements-pipeline.txt') }}
+
+      - name: Install lint tools
+        run: pip install flake8 flake8-bugbear
+
+      - name: flake8 — src/
+        run: |
+          flake8 src/ \
+            --max-line-length=120 \
+            --extend-ignore=E203,W503 \
+            --exclude=src/__pycache__,src/*/__pycache__
+
+      - name: flake8 — tests/
+        run: |
+          flake8 tests/ \
+            --max-line-length=120 \
+            --extend-ignore=E203,W503
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # JOB 2 — Unit Tests (CPU-only, no GPU needed in CI)
+  # ─────────────────────────────────────────────────────────────────────────
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: test-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements-pipeline.txt') }}
+
+      - name: Install CPU-only PyTorch + project deps
+        run: |
+          pip install --upgrade pip
+          pip install torch==2.2.2 torchvision==0.17.2 \
+            --index-url https://download.pytorch.org/whl/cpu
+          pip install \
+            Pillow==10.3.0 \
+            numpy==1.26.4 \
+            scikit-learn==1.4.2 \
+            scipy==1.13.0 \
+            tqdm==4.66.4 \
+            mlflow==2.12.2 \
+            prometheus-client==0.20.0 \
+            python-dotenv==1.0.1 \
+            PyYAML==6.0.1 \
+            pytest==8.2.0 \
+            pytest-cov==5.0.0
+
+      - name: Write CI .env
+        run: |
+          cat > .env << 'EOF'
+          DAGSHUB_TOKEN=ci-test-token
+          DAGSHUB_USERNAME=ci-user
+          MLFLOW_TRACKING_URI=http://localhost:5000
+          MLFLOW_TRACKING_USERNAME=ci-user
+          MLFLOW_TRACKING_PASSWORD=ci-test-token
+          RAW_DATA_DIR=data/raw/mvtec_ad
+          PROCESSED_DATA_DIR=data/processed
+          MODEL_CATEGORY=bottle
+          DEVICE=cpu
+          EOF
+
+      - name: Run unit tests with coverage
+        run: |
+          pytest tests/ \
+            -v \
+            --tb=short \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-fail-under=60 \
+            -m "not integration and not gpu"
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # JOB 3 — Validate Config Files
+  # ─────────────────────────────────────────────────────────────────────────
+  validate-configs:
+    name: Validate Config Files
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: pip install PyYAML
+
+      - name: Validate params.yaml
+        run: |
+          python - << 'EOF'
+          import yaml
+          with open("params.yaml") as f:
+              p = yaml.safe_load(f)
+          for key in ["data", "model", "training", "inference"]:
+              assert key in p, f"Missing key: {key}"
+          assert len(p["data"]["categories"]) == 15, "Expected 15 categories"
+          assert p["model"]["coreset_ratio"] > 0
+          assert p["model"]["patch_size"] <= p["model"]["image_size"]
+          print("PASS: params.yaml")
+          EOF
+
+      - name: Validate docker-compose.yml
+        run: |
+          python - << 'EOF'
+          import yaml
+          with open("docker-compose.yml") as f:
+              dc = yaml.safe_load(f)
+          for svc in ["mlflow","prometheus","alertmanager","grafana","airflow","postgres"]:
+              assert svc in dc["services"], f"Missing service: {svc}"
+          print("PASS: docker-compose.yml")
+          EOF
+
+      - name: Validate alert_rules.yml
+        run: |
+          python - << 'EOF'
+          import yaml
+          with open("monitoring/alert_rules.yml") as f:
+              rules = yaml.safe_load(f)
+          assert rules.get("groups"), "No groups found"
+          for g in rules["groups"]:
+              for r in g.get("rules", []):
+                  assert "alert" in r and "expr" in r
+          names = [r["alert"] for g in rules["groups"] for r in g.get("rules",[])]
+          assert len(names) >= 5, f"Expected at least 5 alert rules, got {len(names)}"
+          print(f"PASS: alert_rules.yml — {names}")
+          EOF
+
+      - name: Validate Grafana dashboard JSON
+        run: |
+          python - << 'EOF'
+          import json
+          with open("monitoring/grafana/dashboards/defect_detection.json") as f:
+              dash = json.load(f)
+          panels = dash.get("panels", [])
+          assert len(panels) >= 13, f"Expected 13+ panels, got {len(panels)}"
+          assert all("title" in p for p in panels), "Panel missing title"
+          print(f"PASS: dashboard JSON — {len(panels)} panels")
+          EOF
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # JOB 4 — Docker Build Check (Airflow image)
+  # ─────────────────────────────────────────────────────────────────────────
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    needs: [unit-tests, validate-configs]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build Airflow image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/airflow.Dockerfile
+          push: false
+          tags: defect-detection/airflow:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # JOB 5 — CI Summary
+  # ─────────────────────────────────────────────────────────────────────────
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests, validate-configs, docker-build]
+    if: always()
+    steps:
+      - name: Print result table
+        run: |
+          echo "================================================"
+          echo " CI — Surface Defect Detection MLOps"
+          echo "================================================"
+          echo " Lint           : ${{ needs.lint.result }}"
+          echo " Unit Tests     : ${{ needs.unit-tests.result }}"
+          echo " Config Check   : ${{ needs.validate-configs.result }}"
+          echo " Docker Build   : ${{ needs.docker-build.result }}"
+          echo "================================================"
+
+      - name: Fail if any required job failed
+        if: |
+          needs.lint.result == 'failure' ||
+          needs.unit-tests.result == 'failure' ||
+          needs.validate-configs.result == 'failure'
+        run: exit 1
