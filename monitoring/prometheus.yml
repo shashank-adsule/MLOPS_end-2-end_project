@@ -25,13 +25,3 @@ scrape_configs:
   - job_name: "prometheus"
     static_configs:
       - targets: ["localhost:9090"]
-
-  - job_name: "mlflow"
-    static_configs:
-      - targets: ["mlflow:5000"]
-    metrics_path: /
-    scrape_interval: 30s
-    metric_relabel_configs:
-      - source_labels: [__name__]
-        action: drop
-        regex: ".*"

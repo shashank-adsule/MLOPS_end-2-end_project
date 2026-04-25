@@ -40,6 +40,49 @@ import tempfile, pathlib
 
 _STATE_FILE = pathlib.Path(tempfile.gettempdir()) / "app_down_state.txt"
 
+# ── File-based metrics store ─────────────────────────────────────────────────
+_METRICS_FILE = pathlib.Path(tempfile.gettempdir()) / "app_metrics_state.json"
+
+def _read_metrics_state() -> dict:
+    try:
+        import json
+        return json.loads(_METRICS_FILE.read_text())
+    except Exception:
+        return {
+            "predictions": 0, "defects": 0, "normal": 0,
+            "drift": 0, "latency_sum": 0.0, "latency_count": 0,
+            "latency_p95": 0.0, "score": {},
+            "by_category": {}, "by_verdict": {}
+        }
+
+def _write_metrics_state(state: dict):
+    import json
+    _METRICS_FILE.write_text(json.dumps(state))
+
+def _record_prediction(category, verdict, latency_ms, anomaly_score, is_defective, drifted):
+    """Thread-safe metric recording via JSON file."""
+    import json
+    state = _read_metrics_state()
+    state["predictions"]    = state.get("predictions", 0) + 1
+    state["latency_sum"]    = state.get("latency_sum", 0.0) + latency_ms
+    state["latency_count"]  = state.get("latency_count", 0) + 1
+    state["latency_p95"]    = latency_ms  # simplified: last value
+    if is_defective:
+        state["defects"] = state.get("defects", 0) + 1
+    else:
+        state["normal"]  = state.get("normal",  0) + 1
+    if drifted:
+        state["drift"]   = state.get("drift",   0) + 1
+    # per-category score
+    scores = state.get("score", {})
+    scores[category] = anomaly_score
+    state["score"] = scores
+    # per-category count
+    by_cat = state.get("by_category", {})
+    by_cat[category] = by_cat.get(category, 0) + 1
+    state["by_category"] = by_cat
+    _write_metrics_state(state)
+
 def _set_app_down(value: int):
     """Write 0 or 1 to the shared state file."""
     _STATE_FILE.write_text(str(value))
@@ -56,37 +99,35 @@ if not _STATE_FILE.exists():
     _set_app_down(0)
 
 # ---------------------------------------------------------------------------
-# Metrics — created at module level with try/except for hot-reload safety
+# Metrics — use a PRIVATE isolated registry (not the default global one).
+# This completely avoids all duplicate registration errors regardless of
+# what other modules register in the default REGISTRY.
 # ---------------------------------------------------------------------------
-try:
-    _M_PREDICT  = Counter("predictions_total",           "Total predictions",   ["category", "verdict"])
-    _M_LATENCY  = Histogram("inference_latency_seconds", "Inference latency",   ["category"],
-                             buckets=[0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0, 2.0])
-    _M_SCORE    = Gauge("anomaly_score_last",            "Last anomaly score",  ["category"])
-    _M_DRIFT    = Counter("drift_detected_total",        "Drift detections",    ["category"])
-    _M_DEFECTS  = Counter("defects_detected_total",      "Total defects",       ["category"])
-    _M_NORMAL   = Counter("normal_detected_total",       "Total normal",        ["category"])
-    _M_APP_DOWN = Gauge("app_down_manual",               "APP DOWN flag 1=down 0=up")
-    _M_APP_DOWN.set(0)
-except ValueError:
-    _cols = REGISTRY._names_to_collectors
-    _M_PREDICT  = _cols.get("predictions_total_total",          _cols.get("predictions_total"))
-    _M_LATENCY  = _cols.get("inference_latency_seconds_bucket", _cols.get("inference_latency_seconds"))
-    _M_SCORE    = _cols.get("anomaly_score_last")
-    _M_DRIFT    = _cols.get("drift_detected_total_total",       _cols.get("drift_detected_total"))
-    _M_DEFECTS  = _cols.get("defects_detected_total_total",     _cols.get("defects_detected_total"))
-    _M_NORMAL   = _cols.get("normal_detected_total_total",      _cols.get("normal_detected_total"))
-    _M_APP_DOWN = _cols.get("app_down_manual")
+from prometheus_client import CollectorRegistry
+
+_APP_REGISTRY = CollectorRegistry()
+
+# All metrics as Gauges in private registry — synced from files on every scrape
+_M_PREDICT_G = Gauge("predictions_total",          "Total predictions",        registry=_APP_REGISTRY)
+_M_DEFECTS_G = Gauge("defects_detected_total",     "Total defects",            registry=_APP_REGISTRY)
+_M_NORMAL_G  = Gauge("normal_detected_total",      "Total normal",             registry=_APP_REGISTRY)
+_M_DRIFT_G   = Gauge("drift_detected_total",       "Drift detections",         registry=_APP_REGISTRY)
+_M_LATENCY_G = Gauge("inference_latency_avg_ms",   "Avg inference latency ms", registry=_APP_REGISTRY)
+_M_P95_G     = Gauge("inference_latency_p95_ms",   "P95 inference latency ms", registry=_APP_REGISTRY)
+_M_SCORE     = Gauge("anomaly_score_last",         "Last anomaly score",       ["category"], registry=_APP_REGISTRY)
+_M_BY_CAT_G  = Gauge("predictions_by_category",   "Predictions per category", ["category"], registry=_APP_REGISTRY)
+_M_APP_DOWN  = Gauge("app_down_manual",            "APP DOWN flag 1=down 0=up", registry=_APP_REGISTRY)
+_M_APP_DOWN.set(0)
 
 
 def _get_metrics():
     return {
-        "predict": _M_PREDICT,
-        "latency": _M_LATENCY,
+        "predict": _M_PREDICT_G,
+        "latency": _M_LATENCY_G,
         "score":   _M_SCORE,
-        "drift":   _M_DRIFT,
-        "defects": _M_DEFECTS,
-        "normal":  _M_NORMAL,
+        "drift":   _M_DRIFT_G,
+        "defects": _M_DEFECTS_G,
+        "normal":  _M_NORMAL_G,
     }
 
 
@@ -101,14 +142,27 @@ def _get_app_down_gauge():
 class _MetricsHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/metrics":
-            # Sync file state → gauge before generating output
+            # Sync ALL file-based state → gauges/counters before serving
             try:
-                val = _get_app_down_value()
-                if _M_APP_DOWN is not None:
-                    _M_APP_DOWN.set(val)
-            except Exception:
+                # App down state
+                _M_APP_DOWN.set(_get_app_down_value())
+                # Prediction metrics from shared file
+                s = _read_metrics_state()
+                # Use gauges to represent cumulative counts (simpler than counters for file-based)
+                _M_PREDICT_G.set(s.get("predictions", 0))
+                _M_DEFECTS_G.set(s.get("defects", 0))
+                _M_NORMAL_G.set(s.get("normal", 0))
+                _M_DRIFT_G.set(s.get("drift", 0))
+                cnt = s.get("latency_count", 0)
+                _M_LATENCY_G.set(s.get("latency_sum", 0) / cnt if cnt > 0 else 0)
+                _M_P95_G.set(s.get("latency_p95", 0))
+                for cat, score in s.get("score", {}).items():
+                    _M_SCORE.labels(category=cat).set(score)
+                for cat, count in s.get("by_category", {}).items():
+                    _M_BY_CAT_G.labels(category=cat).set(count)
+            except Exception as e:
                 pass
-            output = generate_latest(REGISTRY)
+            output = generate_latest(_APP_REGISTRY)
             self.send_response(200)
             self.send_header("Content-Type", CONTENT_TYPE_LATEST)
             self.end_headers()
@@ -281,33 +335,22 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 🚨 Alert Control")
 
-    # Track app_down state in session
+    # Track app_down state in session — sync from file so it survives reruns
     if "app_down_active" not in st.session_state:
-        st.session_state.app_down_active = False
+        st.session_state.app_down_active = bool(_get_app_down_value())
 
     if not st.session_state.app_down_active:
         st.success("🟢 App Status: **RUNNING**")
         if st.button("🔴 Trigger APP DOWN Alert", type="primary", use_container_width=True):
-            try:
-                m = _get_metrics()
-                _set_app_down(1)  # write to file — metrics server reads this on next scrape
-                st.session_state.app_down_active = True
-                st.rerun()
-            except Exception as e:
-                st.error(f"Metrics error: {e}")
+            _set_app_down(1)
+            st.session_state.app_down_active = True
+            st.rerun()
     else:
         st.error("🔴 App Status: **DOWN**")
-        st.caption("Alert firing on Prometheus → Alertmanager → Grafana")
-        st.markdown("**Trigger Airflow response DAG:**")
-        st.markdown("👉 [Open Airflow](http://localhost:8081/dags/app_down_response/grid) → Trigger DAG")
-        if st.button("✅ Resolve — Mark App as UP", type="secondary", use_container_width=True):
-            try:
-                m = _get_metrics()
-                _set_app_down(0)  # write to file — metrics server reads this on next scrape
-                st.session_state.app_down_active = False
-                st.rerun()
-            except Exception as e:
-                st.error(f"Metrics error: {e}")
+        if st.button("🟢 Resolve APP DOWN Alert", type="secondary", use_container_width=True):
+            _set_app_down(0)
+            st.session_state.app_down_active = False
+            st.rerun()
     st.markdown("---")
     st.markdown("### Links")
     st.markdown("🔗 [MLflow](http://localhost:5000)")
@@ -352,20 +395,19 @@ if page == "🔍 Detect Defects":
                 is_defective = anomaly_score > threshold
                 verdict      = "defective" if is_defective else "normal"
 
-                # Record metrics safely
+                # Record metrics via file-based shared state
+                # (file approach works across all Streamlit threads)
                 try:
-                    m = _get_metrics()
-                    m["predict"].labels(category=category, verdict=verdict).inc()
-                    m["latency"].labels(category=category).observe(latency_ms / 1000)
-                    m["score"].labels(category=category).set(anomaly_score)
-                    if is_defective:
-                        m["defects"].labels(category=category).inc()
-                    else:
-                        m["normal"].labels(category=category).inc()
-                    if drift_info.get("drifted"):
-                        m["drift"].labels(category=category).inc()
+                    _record_prediction(
+                        category=category,
+                        verdict=verdict,
+                        latency_ms=latency_ms,
+                        anomaly_score=float(anomaly_score),
+                        is_defective=bool(is_defective),
+                        drifted=bool(drift_info.get("drifted", False)),
+                    )
                 except Exception as e:
-                    log.warning("Metrics error: %s", e)
+                    log.warning("Metrics record error: %s", e)
 
             st.markdown("---")
             st.markdown("### Detection Results")
