@@ -1,10 +1,3 @@
-"""
-src/app.py
------------
-Streamlit frontend for Surface Defect Detection System.
-"""
-
-import io
 import json
 import logging
 import os
@@ -61,7 +54,6 @@ def _write_metrics_state(state: dict):
 
 def _record_prediction(category, verdict, latency_ms, anomaly_score, is_defective, drifted):
     """Thread-safe metric recording via JSON file."""
-    import json
     state = _read_metrics_state()
     state["predictions"]    = state.get("predictions", 0) + 1
     state["latency_sum"]    = state.get("latency_sum", 0.0) + latency_ms

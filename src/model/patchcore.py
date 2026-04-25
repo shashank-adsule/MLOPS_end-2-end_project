@@ -347,7 +347,7 @@ class PatchCore(nn.Module):
         distances = []
 
         for i in range(0, len(query), batch_size):
-            q_batch = query[i : i + batch_size].to(self.device)
+            q_batch = query[i:i + batch_size].to(self.device)
             dists = torch.cdist(q_batch, memory)
             nn_dists, _ = dists.min(dim=1)
             distances.append(nn_dists.cpu())
