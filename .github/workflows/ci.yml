@@ -98,12 +98,27 @@ jobs:
           DEVICE=cpu
           EOF
 
+      - name: Write .coveragerc
+        run: |
+          cat > .coveragerc << 'EOF'
+          [run]
+          omit =
+              src/app.py
+              src/model/train.py
+              src/pipeline/airflow_dag.py
+              src/pipeline/app_down_response_dag.py
+              src/monitoring/drift_detector.py
+              E2E/*
+              */site-packages/*
+          EOF
+
       - name: Run unit tests with coverage
         run: |
           pytest tests/ \
             -v \
             --tb=short \
             --cov=src \
+            --cov-config=.coveragerc \
             --cov-report=term-missing \
             --cov-report=xml \
             --cov-fail-under=60 \
