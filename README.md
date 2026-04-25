@@ -1,4 +1,4 @@
-# MLOps End-to-End Project — Surface Defect Detection
+# MLOps End-to-End Project — Surface Anomaly Detection
 
 **Student:** DA25M005 (Shashank Adsule)  
 **Repository:** https://github.com/shashank-adsule/MLOPS_end-2-end_project  
@@ -732,32 +732,6 @@ curl "http://localhost:9090/api/v1/query?query=predictions_total" -UseBasicParsi
 # ── Verify metrics file is written after predictions ───────────────────────
 type $env:TEMP\app_metrics_state.json
 ```
-
----
-
-## 20. Completion Checklist
-
-| Component | Status | Notes |
-|---|---|---|
-| MVTec AD dataset (DVC) | ✅ Complete | 15 categories, 6,644 images |
-| PatchCore training (all 15) | ✅ Complete | Avg AUROC 0.9643 |
-| MLflow on DagsHub | ✅ Complete | All runs logged with artifacts |
-| Local MLflow (dual logging) | ✅ Complete | localhost:5000 |
-| DVC data versioning | ✅ Complete | Remote on DagsHub |
-| Airflow data pipeline DAG | ✅ Complete | localhost:8081 |
-| Airflow incident response DAG | ✅ Complete | Manual trigger |
-| Prometheus metrics server | ✅ Complete | localhost:8000/metrics |
-| Prometheus scraping | ✅ Complete | host.docker.internal:8000 |
-| Alert rules (5 rules) | ✅ Complete | localhost:9090/alerts |
-| Alertmanager | ✅ Complete | localhost:9093 |
-| APP DOWN manual alert | ✅ Complete | Sidebar button in Streamlit |
-| Grafana dashboard (13 panels) | ✅ Complete | Auto-provisioned |
-| Grafana prediction panels bug | ✅ Fixed | fcntl + thread isolation resolved |
-| Streamlit app (CUDA) | ✅ Complete | localhost:8501 |
-| GitHub Actions CI/CD | ✅ Complete | `.github/workflows/ci.yml` — 5 jobs |
-| Unit tests (55 tests) | ✅ Complete | `tests/` — 5 files, all modules covered |
-| HLD document | ✅ Complete | `docs/HLD.md` |
-| LLD + API specs | ✅ Complete | `docs/LLD.md` |
 
 ---
 
