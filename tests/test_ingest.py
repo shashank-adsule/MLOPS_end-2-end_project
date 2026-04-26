@@ -1,17 +1,3 @@
-"""
-tests/test_ingest.py
----------------------
-Unit tests for src/pipeline/ingest.py
-
-Covers:
-  - validate_raw_data() passes on valid structure
-  - validate_raw_data() fails when train/good is missing
-  - validate_raw_data() fails when image count is below minimum
-  - list_train_images() returns correct count
-  - list_test_images() returns dict keyed by defect type
-  - list_ground_truth_masks() returns empty list when dir absent
-"""
-
 import pytest
 import numpy as np
 from pathlib import Path

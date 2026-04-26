@@ -1,23 +1,3 @@
-"""
-src/model/train.py
--------------------
-PatchCore training script with full MLflow experiment tracking.
-
-Tracks:
-  - Parameters: backbone, layers, coreset_ratio, image_size, category
-  - Metrics: AUROC, F1-score, pixel-AUROC, inference latency
-  - Artifacts: model file, heatmap samples, ROC curve
-  - Tags: git commit hash, DVC data version
-
-MLflow tracking URI points to DagsHub hosted MLflow server:
-  https://dagshub.com/da25m005/MLOPS_end-2-end_project.mlflow
-
-Usage:
-  python -m src.model.train                        # uses params.yaml
-  python -m src.model.train --category bottle      # single category
-  python -m src.model.train --category all         # all 15 categories
-"""
-
 import argparse
 import json
 import logging

@@ -1,16 +1,3 @@
-"""
-src/pipeline/ingest.py
------------------------
-Raw data validation for the MVTec AD dataset.
-
-Responsibilities:
-  - Verify expected folder structure exists for each category
-  - Count and log image files per split
-  - Check image readability (not corrupt)
-  - Enforce minimum image counts per split
-  - Return per-category pass/fail dict consumed by Airflow DAG
-"""
-
 import os
 import logging
 from pathlib import Path
@@ -38,16 +25,6 @@ def validate_raw_data(
     raw_dir: str,
     categories: List[str],
 ) -> Dict[str, bool]:
-    """
-    Validate the raw MVTec AD dataset structure.
-
-    Args:
-        raw_dir:    Path to the root mvtec_ad directory.
-        categories: List of category names to validate.
-
-    Returns:
-        Dict mapping category name → True (passed) / False (failed).
-    """
     raw_path = Path(raw_dir)
     results: Dict[str, bool] = {}
 

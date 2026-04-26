@@ -1,16 +1,3 @@
-"""
-Airflow DAG: App Down Response
--------------------------------
-Triggered manually (or via API) when the APP DOWN alert is fired
-from the Streamlit dashboard. Simulates an incident response workflow:
-
-  1. log_alert_received   - logs the incident
-  2. check_services       - checks which services are up
-  3. notify_team          - logs notification (extend with email/slack)
-  4. attempt_recovery     - placeholder for restart logic
-  5. log_resolution       - marks incident resolved
-"""
-
 from datetime import datetime, timedelta
 import logging
 

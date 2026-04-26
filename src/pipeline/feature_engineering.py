@@ -1,18 +1,3 @@
-"""
-src/pipeline/feature_engineering.py
--------------------------------------
-Compute and persist baseline statistics for each category.
-
-These baselines serve two purposes:
-  1. Drift detection at inference time — compare incoming image stats
-     against training distribution (mean, variance, pixel intensity).
-  2. Anomaly score threshold calibration — set detection threshold
-     from the training-set score distribution.
-
-Output per category:
-  data/processed/{category}/stats/baseline.json
-"""
-
 import json
 import logging
 from pathlib import Path
@@ -34,17 +19,6 @@ def compute_baseline_statistics(
     processed_dir: str,
     category: str,
 ) -> Dict:
-    """
-    Compute pixel-level and tensor-level statistics from preprocessed
-    training tensors. Save to baseline.json for later drift detection.
-
-    Args:
-        processed_dir: Root of processed data directory.
-        category:      Category name (e.g. 'bottle').
-
-    Returns:
-        Dict with computed statistics (also written to disk).
-    """
     train_dir = Path(processed_dir) / category / "train"
     stats_dir = Path(processed_dir) / category / "stats"
     stats_dir.mkdir(parents=True, exist_ok=True)
@@ -118,12 +92,6 @@ def compute_baseline_statistics(
 
 
 def load_baseline(processed_dir: str, category: str) -> Dict:
-    """
-    Load the pre-computed baseline statistics for a category.
-    Used at inference time by the drift detector.
-
-    Raises FileNotFoundError if baseline.json does not exist.
-    """
     path = Path(processed_dir) / category / "stats" / BASELINE_FILENAME
     if not path.exists():
         raise FileNotFoundError(
@@ -139,17 +107,6 @@ def check_drift(
     baseline: Dict,
     sigma_threshold: float = 3.0,
 ) -> Dict:
-    """
-    Compare a single inference image against the training baseline.
-
-    Args:
-        image_tensor:    Preprocessed image tensor [3, H, W].
-        baseline:        Loaded baseline dict from load_baseline().
-        sigma_threshold: Number of standard deviations for drift alert.
-
-    Returns:
-        Dict with keys: drifted (bool), z_score (float), details (dict).
-    """
     img_mean  = float(image_tensor.mean())
     baseline_mean = baseline["global_mean"]
     baseline_std  = baseline["global_std"]

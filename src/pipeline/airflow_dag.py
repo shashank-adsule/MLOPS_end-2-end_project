@@ -1,15 +1,3 @@
-"""
-Airflow DAG: MVTec AD Data Pipeline
-------------------------------------
-Orchestrates the full data engineering pipeline:
-  1. validate_raw_data     - schema + file integrity checks
-  2. preprocess_images     - resize, normalize, save tensors
-  3. compute_baselines     - mean/variance per category for drift detection
-  4. trigger_dvc_pipeline  - version processed data with DVC
-
-Reproducible via: Git commit hash + MLflow run ID
-"""
-
 import os
 import logging
 from datetime import datetime, timedelta
@@ -150,3 +138,4 @@ with DAG(
     # Task dependency chain
     # ------------------------------------------------------------------
     validate_task >> preprocess_task >> baseline_task >> dvc_task
+s

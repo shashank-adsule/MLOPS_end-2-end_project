@@ -1,22 +1,3 @@
-"""
-tests/conftest.py
-------------------
-Shared pytest fixtures for the Surface Defect Detection test suite.
-Fixtures are available to all test files without importing.
-
-Fixture summary
----------------
-random_rgb_image    — 224×224 PIL image (random pixels)
-random_tensor       — preprocessed [3,224,224] float tensor
-batch_tensor        — [4,3,224,224] batch
-tmp_dir             — alias for pytest tmp_path
-processed_dir       — temp processed data tree: bottle/train + test/good + test/broken_large
-raw_mvtec_dir       — temp raw MVTec-like structure with 55 PNG train images
-baseline_dict       — pre-built drift baseline stats dict for 'bottle'
-baseline_file       — baseline_dict written to tmp_path/bottle/stats/baseline.json
-tiny_patchcore      — session-scoped PatchCore with injected memory bank (no fit() needed)
-"""
-
 import json
 import tempfile
 from pathlib import Path
@@ -63,15 +44,6 @@ def tmp_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def processed_dir(tmp_path: Path) -> Path:
-    """
-    Minimal processed data directory for category 'bottle'.
-    Layout:
-        <tmp>/bottle/train/          ← 10 normal .pt tensors
-        <tmp>/bottle/test/good/      ← 5 normal .pt tensors
-        <tmp>/bottle/test/broken_large/ ← 5 defect .pt tensors (shifted dist)
-        <tmp>/bottle/stats/          ← empty (filled by feature_engineering tests)
-    Returns tmp_path so callers pass it as processed_dir.
-    """
     cat = "bottle"
     train_dir = tmp_path / cat / "train"
     good_dir   = tmp_path / cat / "test" / "good"
@@ -94,14 +66,6 @@ def processed_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def raw_mvtec_dir(tmp_path: Path) -> Path:
-    """
-    Minimal raw MVTec AD directory structure for category 'bottle'.
-    Satisfies ingest.validate_raw_data() constraints:
-      - ≥50 images in train/good
-      - ≥10 images in test/good
-      - ground_truth/ directory present
-    Returns tmp_path.
-    """
     cat = "bottle"
     dirs = {
         "train_good":  tmp_path / cat / "train" / "good",
@@ -165,13 +129,6 @@ def baseline_file(tmp_path: Path, baseline_dict: Dict) -> Path:
 
 @pytest.fixture(scope="session")
 def tiny_patchcore():
-    """
-    PatchCore on CPU with a synthetic 50-patch memory bank injected directly.
-    Skips fit() entirely so tests run in seconds without real training data.
-    The memory bank dimension 1536 = typical layer2+layer3 channel count
-    after adaptive pooling in WideResNet50.
-    Scope=session: backbone weights downloaded once, not once per test.
-    """
     from src.model.patchcore import PatchCore
     model = PatchCore(
         backbone="wide_resnet50_2",

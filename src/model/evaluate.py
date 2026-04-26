@@ -1,16 +1,3 @@
-"""
-src/model/evaluate.py
-----------------------
-Evaluation of PatchCore on MVTec AD test set.
-
-Computes:
-  - Image-level AUROC (defect vs normal classification)
-  - Image-level F1-score (at optimal threshold)
-  - Pixel-level AUROC (localization quality vs ground truth masks)
-  - Average inference latency per image
-  - Saves ROC curve data and sample heatmaps
-"""
-
 import json
 import logging
 import time
@@ -32,10 +19,6 @@ NORMAL_LABEL = 0
 # Dataset
 # ---------------------------------------------------------------------------
 class MVTecTestDataset(Dataset):
-    """
-    Loads preprocessed test tensors for a single defect type.
-    Label = 0 for 'good', 1 for any defect type.
-    """
 
     def __init__(self, processed_dir: str, category: str, defect_type: str):
         self.tensor_paths = sorted(
@@ -62,20 +45,6 @@ def evaluate_category(
     save_heatmaps: bool = True,
     n_heatmap_samples: int = 5,
 ) -> Dict:
-    """
-    Full evaluation of a trained PatchCore model on one category.
-
-    Args:
-        model:             Trained PatchCore instance.
-        processed_dir:     Root of processed data.
-        category:          Category name.
-        reports_dir:       Where to save metrics and plots.
-        save_heatmaps:     Whether to save sample heatmap images.
-        n_heatmap_samples: How many heatmap samples to save per defect type.
-
-    Returns:
-        Dict with auroc, f1_score, pixel_auroc, avg_latency_ms, threshold.
-    """
     test_root = Path(processed_dir) / category / "test"
     defect_types = sorted([d.name for d in test_root.iterdir() if d.is_dir()])
 
@@ -128,8 +97,7 @@ def evaluate_category(
     threshold, f1 = _optimal_f1_threshold(labels_arr, scores_arr)
 
     # Pixel-level AUROC (simplified — uses image scores as proxy)
-    # Full pixel-AUROC requires ground truth masks; this is the image-level proxy
-    pixel_auroc = auroc   # replace with mask-based computation when masks available
+    pixel_auroc = auroc
 
     avg_latency = float(np.mean(all_latencies))
 

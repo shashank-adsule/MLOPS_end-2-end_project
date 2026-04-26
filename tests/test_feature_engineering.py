@@ -1,16 +1,3 @@
-"""
-tests/test_feature_engineering.py
------------------------------------
-Unit tests for src/pipeline/feature_engineering.py
-
-Covers:
-  - compute_baseline_statistics() schema and value correctness
-  - load_baseline() happy path and missing-file error
-  - check_drift() correctly flags drifted vs normal images
-  - check_drift() z-score direction (large shift → high z-score)
-  - drift_low / drift_high thresholds are ±3σ
-"""
-
 import json
 import pytest
 import torch

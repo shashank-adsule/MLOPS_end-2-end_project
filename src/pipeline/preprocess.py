@@ -1,24 +1,3 @@
-"""
-src/pipeline/preprocess.py
----------------------------
-Image preprocessing pipeline for MVTec AD dataset.
-
-Responsibilities:
-  - Resize images to a configurable size (default 256x256)
-  - Center-crop to patch size (default 224x224) for backbone compatibility
-  - Normalize with ImageNet mean/std (matches WideResNet50 pretraining)
-  - Save processed tensors as .pt files for fast DataLoader loading
-  - Return throughput statistics consumed by Airflow DAG
-
-Output layout:
-  data/processed/{category}/
-      train/{0001.pt, 0002.pt, ...}   <- normal-only
-      test/{good/0001.pt, broken_large/0001.pt, ...}
-
-Usage:
-  python -m src.pipeline.preprocess
-"""
-
 import os
 import time
 import logging
@@ -52,19 +31,6 @@ def preprocess_all_categories(
     image_size: int = 256,
     patch_size: int = 224,
 ) -> Dict[str, Dict]:
-    """
-    Preprocess all categories and return per-category statistics.
-
-    Args:
-        raw_dir:       Root of raw MVTec AD data.
-        processed_dir: Root output directory for processed tensors.
-        categories:    List of category names to process.
-        image_size:    Resize target before center crop.
-        patch_size:    Center crop size (must match CNN input).
-
-    Returns:
-        Dict of {category: {train_count, test_count, elapsed_sec}}
-    """
     transform = _build_transform(image_size, patch_size)
     stats: Dict[str, Dict] = {}
 

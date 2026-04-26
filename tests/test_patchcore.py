@@ -1,17 +1,3 @@
-"""
-tests/test_patchcore.py
-------------------------
-Unit tests for src/model/patchcore.py
-
-Covers:
-  - Model construction (backbone loads, hooks register)
-  - predict() returns correct types and value ranges
-  - predict_batch() length matches input
-  - save() / load() round-trip preserves memory bank
-  - heatmap shape matches image_size
-  - CPU fallback when CUDA unavailable
-"""
-
 import pytest
 import numpy as np
 import torch

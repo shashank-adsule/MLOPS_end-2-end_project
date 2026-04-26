@@ -1,17 +1,3 @@
-"""
-tests/test_evaluate.py
------------------------
-Unit tests for src/model/evaluate.py
-
-Covers:
-  - _optimal_f1_threshold() returns float threshold and f1
-  - _optimal_f1_threshold() picks the right threshold on a known case
-  - evaluate_category() returns dict with required keys
-  - evaluate_category() produces eval_metrics.json on disk
-  - evaluate_category() produces roc_curve.csv on disk
-  - evaluate_category() saves heatmap .npy files for defects
-"""
-
 import json
 import pytest
 import numpy as np

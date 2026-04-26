@@ -1,8 +1,7 @@
 # High Level Design — MLOps End-to-End Surface Defect Detection
 
-**Student:** DA25M005 (Shashank Adsule)
-**Repository:** https://github.com/shashank-adsule/MLOPS_end-2-end_project
-**Version:** 1.0 | **Date:** April 2026
+**Student:** DA25M005 (Shashank Adsule)  
+**Repository:** https://github.com/shashank-adsule/MLOPS_end-2-end_project  
 
 ---
 
@@ -30,7 +29,7 @@ The system is a full MLOps pipeline from raw data to monitored production infere
 │  DVC Versioning      │  MLflow Tracking     │  Prometheus Metrics    │
 │  Airflow Pipeline    │  Model Registry      │  :8501  :8000          │
 ├──────────────────────┴──────────────────────┴────────────────────────┤
-│  OBSERVABILITY PLANE                                                  │
+│  OBSERVABILITY PLANE                                                 │
 │  Prometheus :9090  →  Alertmanager :9093  →  Grafana :3001           │
 ├──────────────────────────────────────────────────────────────────────┤
 │  ORCHESTRATION PLANE          │  INFRASTRUCTURE PLANE                │
@@ -44,38 +43,38 @@ The system is a full MLOps pipeline from raw data to monitored production infere
 ## 3. Architecture Diagram
 
 ```
-                          ┌─────────────────────────────────────────────────────┐
-                          │               Docker Network: defect_net             │
-                          │                                                      │
+                          ┌────────────────────────────────────────────────────┐
+                          │               Docker Network: defect_net           │
+                          │                                                    │
    User / Browser         │   ┌──────────────┐         ┌──────────────────┐    │
         │                 │   │  Streamlit   │         │    Prometheus    │    │
         │ :8501           │   │  app.py      │◄────────│    :9090         │    │
         ▼                 │   │  (local GPU) │         │                  │    │
    ┌─────────┐            │   │  :8501 :8000 │         │  scrapes         │    │
    │Streamlit│            │   └──────┬───────┘         │  host.docker     │    │
-   │  UI     │            │          │ predict()        │  .internal:8000  │    │
-   └────┬────┘            │          ▼                  └────────┬─────────┘    │
-        │                 │   ┌──────────────┐                   │ alerts       │
-        │ upload image    │   │  PatchCore   │                   ▼              │
+   │  UI     │            │          │ predict()       │  .internal:8000  │    │
+   └────┬────┘            │          ▼                 └────────┬─────────┘    │
+        │                 │   ┌──────────────┐                  │ alerts       │
+        │ upload image    │   │  PatchCore   │                  ▼              │
         │                 │   │  .pt model   │         ┌──────────────────┐    │
         │                 │   │  (CUDA)      │         │  Alertmanager    │    │
         │                 │   └──────────────┘         │  :9093           │    │
-        │                 │                             └──────────────────┘    │
-        │                 │   ┌──────────────┐                                  │
+        │                 │                            └──────────────────┘    │
+        │                 │   ┌──────────────┐                                 │
         │                 │   │   MLflow     │         ┌──────────────────┐    │
         │                 │   │   :5000      │         │   Grafana        │    │
         │                 │   └──────────────┘         │   :3001          │    │
-        │                 │                             │   13 panels      │    │
+        │                 │                            │   13 panels      │    │
         │                 │   ┌──────────────┐         └──────────────────┘    │
-        │                 │   │   Airflow    │                                  │
+        │                 │   │   Airflow    │                                 │
         │                 │   │   :8081      │──┐      ┌──────────────────┐    │
         │                 │   └──────────────┘  └─────►│   Postgres       │    │
-        │                 │                             │   :5432          │    │
-        │                 └─────────────────────────────┴──────────────────┘    │
-        │                                                                        │
-        │                 Remote Services:                                       │
-        │                   DagsHub MLflow  ← experiment runs, artifacts        │
-        └─────────────────  DagsHub DVC     ← raw + processed data versioning   │
+        │                 │                            │   :5432          │    │
+        │                 └────────────────────────────┴──────────────────┘    │
+        │                                                                      │
+        │                 Remote Services:                                     │
+        │                   DagsHub MLflow  ← experiment runs, artifacts       │
+        └─────────────────  DagsHub DVC     ← raw + processed data versioning  │
 ```
 
 ---
@@ -226,5 +225,5 @@ Raw PNG images (MVTec AD)
 
 ---
 
-**Prepared by:** Shashank Adsule — DA25M005
+**Prepared by:** Shashank Adsule — DA25M005  
 **Date:** April 2026

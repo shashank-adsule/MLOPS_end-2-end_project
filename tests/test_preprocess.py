@@ -1,17 +1,3 @@
-"""
-tests/test_preprocess.py
--------------------------
-Unit tests for src/pipeline/preprocess.py
-
-Covers:
-  - _build_transform() output shape and type
-  - _preprocess_split() creates .pt files
-  - preprocess_all_categories() produces correct dir layout
-  - load_tensor() reloads a saved tensor correctly
-  - Corrupt image is skipped gracefully (no crash)
-  - Stats dict has expected keys
-"""
-
 import pytest
 import torch
 import numpy as np

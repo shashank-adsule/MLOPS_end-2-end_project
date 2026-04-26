@@ -1,9 +1,7 @@
 # Low Level Design & API Specifications — MLOps End-to-End Surface Defect Detection
 
-**Student:** DA25M005 (Shashank Adsule)
-**Repository:** https://github.com/shashank-adsule/MLOPS_end-2-end_project
-**Version:** 1.0 | **Date:** April 2026
-
+**Student:** DA25M005 (Shashank Adsule)  
+**Repository:** https://github.com/shashank-adsule/MLOPS_end-2-end_project   
 ---
 
 ## 1. Module Breakdown
@@ -493,5 +491,5 @@ Every training run logs the following to DagsHub (primary) and localhost:5000 (s
 
 ---
 
-**Prepared by:** Shashank Adsule — DA25M005
+**Prepared by:** Shashank Adsule — DA25M005  
 **Date:** April 2026

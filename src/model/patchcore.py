@@ -1,22 +1,3 @@
-"""
-src/model/patchcore.py
------------------------
-PatchCore anomaly detection algorithm.
-
-Algorithm summary:
-  1. Extract patch-level features from a pretrained WideResNet50 backbone
-     at layers layer2 and layer3 (multi-scale)
-  2. Aggregate features via adaptive average pooling into a flat memory bank
-  3. Apply greedy coreset subsampling to keep only the most representative
-     patches (reduces memory + inference time)
-  4. At inference: compute nearest-neighbor distance from each patch to the
-     memory bank — high distance = anomaly
-  5. Produce pixel-level anomaly heatmap via Gaussian smoothing
-
-Reference: Roth et al. "Towards Total Recall in Industrial Anomaly Detection"
-           https://arxiv.org/abs/2106.08265
-"""
-
 import logging
 from typing import Dict, List, Tuple
 
@@ -32,17 +13,6 @@ log = logging.getLogger(__name__)
 
 
 class PatchCore(nn.Module):
-    """
-    PatchCore anomaly detector.
-
-    Args:
-        backbone:      torchvision model name (default: wide_resnet50_2)
-        layers:        list of layer names to extract features from
-        coreset_ratio: fraction of patches to keep in memory bank (0.0-1.0)
-        image_size:    input image size (used for heatmap upsampling)
-        device:        torch device string ('cuda' or 'cpu')
-    """
-
     def __init__(
         self,
         backbone: str = "wide_resnet50_2",
@@ -81,12 +51,6 @@ class PatchCore(nn.Module):
     # ------------------------------------------------------------------
 
     def fit(self, dataloader: torch.utils.data.DataLoader) -> None:
-        """
-        Build the memory bank from normal training images.
-
-        Args:
-            dataloader: DataLoader yielding preprocessed normal image tensors
-        """
         log.info("Building PatchCore memory bank...")
         all_patches = []
 
@@ -114,16 +78,6 @@ class PatchCore(nn.Module):
         self,
         image: torch.Tensor,
     ) -> Tuple[float, np.ndarray]:
-        """
-        Predict anomaly score and heatmap for a single image.
-
-        Args:
-            image: Preprocessed image tensor [1, 3, H, W] or [3, H, W]
-
-        Returns:
-            anomaly_score: float
-            heatmap:       np.ndarray [H, W] in [0, 1]
-        """
         if self.memory_bank is None:
             raise RuntimeError("Memory bank is empty. Call fit() first.")
 
@@ -209,10 +163,6 @@ class PatchCore(nn.Module):
                 module.register_forward_hook(make_hook(name))
 
     def _extract_patches(self, images: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass → extract + aggregate multi-scale features.
-        Returns: [N*H*W, D] patch feature vectors
-        """
         self._features.clear()
         _ = self.feature_extractor(images)
 
@@ -246,13 +196,6 @@ class PatchCore(nn.Module):
     # ------------------------------------------------------------------
 
     def _coreset_subsample(self, patches: torch.Tensor) -> torch.Tensor:
-        """
-        Fast coreset subsampling using random projection + mini-batch
-        k-means approximation.
-
-        This avoids the full N×N distance matrix that causes OOM/hangs
-        on GPUs with limited VRAM (e.g. RTX 3050 6GB).
-        """
         n_total = len(patches)
         n_keep  = max(1, int(n_total * self.coreset_ratio))
 
@@ -284,18 +227,6 @@ class PatchCore(nn.Module):
         n_keep: int,
         chunk_size: int = 1000,
     ) -> torch.Tensor:
-        """
-        Greedy farthest-point sampling on CPU using chunked distance
-        computation — avoids building the full N×N matrix at once.
-
-        Args:
-            patches:    [N, D] projected patch features on CPU
-            n_keep:     number of patches to select
-            chunk_size: process distances in chunks to limit RAM usage
-
-        Returns:
-            selected_indices: [n_keep] LongTensor
-        """
         n_total = len(patches)
         selected = []
 
@@ -339,10 +270,6 @@ class PatchCore(nn.Module):
         memory: torch.Tensor,
         batch_size: int = 256,
     ) -> torch.Tensor:
-        """
-        Distance from each query patch to its nearest neighbour in memory.
-        Batched to avoid OOM.
-        """
         memory = memory.to(self.device)
         distances = []
 
